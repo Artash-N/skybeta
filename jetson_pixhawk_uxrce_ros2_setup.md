@@ -1,6 +1,6 @@
 # Jetson Orin Nano ↔ Pixhawk 6C uXRCE-DDS / ROS 2 Bridge Setup
 
-This document summarizes the full path from fixing the Jetson UART issue to bringing up a working PX4 uXRCE-DDS / ROS 2 bridge over UART.
+This document summarizes the full process to connect a Jetson Orin Nano and a Pixhawk 6C via PX4 uXRCE-DDS / ROS 2 bridge over UART.
 
 ---
 
@@ -12,14 +12,13 @@ The 40-pin header UART on pins 8/10 maps to:
 - `serial@3100000`
 - `/dev/ttyTHS1`
 
-There is a known UART DMA / IOMMU issue on some Orin Nano / NX R36.5 systems.  
-The final fix used was the **DMA + IOMMU fix**.
+There is a known UART DMA / IOMMU issue on some Orin Nano / NX R36.5 systems. To fix this issue, please run the script included in this repository.
 
-### Script used
+### Script used:
 
 ```bash
-chmod +x jetson_uart_dma_iommu_universal_v3.sh
-sudo ./jetson_uart_dma_iommu_universal_v3.sh apply
+chmod +x jetson_uart_dma_fix.sh
+sudo ./jetson_uart_dma_fix.sh apply
 sudo reboot
 ```
 

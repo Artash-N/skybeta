@@ -71,6 +71,16 @@ SER_TEL2_BAUD   = 57600
 
 Then MAVProxy was used over `/dev/ttyTHS1` to confirm the UART link worked.
 
+To test this, you may run:
+
+```text
+sudo apt update
+sudo apt install python3-pip python3-dev
+python3 -m pip install --user MAVProxy
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+mavproxy.py --master=/dev/ttyTHS1,57600 --show-errors
+```
 ---
 
 ## 4. Switch TELEM2 from MAVLink to uXRCE-DDS

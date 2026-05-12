@@ -1,0 +1,37 @@
+/oak:
+  ros__parameters:
+    driver:
+      i_enable_ir: false
+    pipeline_gen:
+      i_pipeline_type: stereo
+      i_enable_imu: true
+      i_nn_type: none
+    stereo:
+      i_publish_left_rect: true
+      i_publish_right_rect: true
+      i_publish_synced_rect_pair: true
+      i_reverse_stereo_socket_order: true
+      i_fps: 30.0
+      i_enable_lazy_publisher: false
+      i_depth_preset: DEFAULT
+    left:
+      i_publish_topic: true
+      i_enable_lazy_publisher: false
+      i_width: 1280
+      i_height: 800
+      i_fps: 30.0
+    right:
+      i_publish_topic: true
+      i_enable_lazy_publisher: false
+      i_width: 1280
+      i_height: 800
+      i_fps: 30.0
+    left:
+      i_publish_topic: true
+      i_enable_lazy_publisher: false
+    right:
+      i_publish_topic: true
+      i_enable_lazy_publisher: false
+    imu:
+      i_batch_report_threshold: 1
+      i_max_batch_reports: 10

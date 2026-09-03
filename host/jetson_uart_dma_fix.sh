@@ -19,9 +19,11 @@ need_cmd() { command -v "$1" >/dev/null 2>&1 || die "Missing required command: $
 usage() {
   cat <<USAGE
 Usage:
-  sudo $SCRIPT_NAME apply [--reboot]
+  sudo $SCRIPT_NAME apply [--reboot] [--force]
+       $SCRIPT_NAME apply --dry-run            # no root; shows the extlinux diff
   sudo $SCRIPT_NAME status
   sudo $SCRIPT_NAME restore [--reboot]
+       $SCRIPT_NAME rewrite-extlinux <file> <dtb-path>   # helper, used by tests
 
 Purpose:
   Patch Jetson Orin / tegra234 UARTA serial@3100000 for the R36.5 UART DMA/IOMMU issue.
@@ -36,6 +38,14 @@ What apply does:
   - Compiles /boot/dtb/uart_dma_fix.dtb
   - Points /boot/extlinux/extlinux.conf at that DTB
   - Verifies the staged DTB before success
+
+Idempotency:
+  - apply is a no-op (exit 0) when the patch is already live: the running device
+    tree carries serial@3100000/iommus, $PATCHED_DTB exists, and extlinux.conf
+    already points at it. Use --force to rewrite anyway.
+  - The extlinux rewrite deletes every FDT line inside "LABEL primary" and then
+    inserts exactly one immediately after LINUX, so repeated runs cannot stack
+    duplicate FDT entries.
 
 Restore:
   - Restores extlinux.conf from backup.
@@ -70,7 +80,13 @@ assert_supported_platform() {
 
 make_workdir() {
   WORKDIR=${WORKDIR:-$WORKDIR_DEFAULT}
-  mkdir -p "$WORKDIR"
+  # The default lives under /var/tmp and is created root-owned by the first
+  # `sudo apply`. Unprivileged callers (--dry-run, the unit test) then cannot
+  # write into it, so fall back to a per-user directory rather than dying.
+  if ! mkdir -p "$WORKDIR" 2>/dev/null || [[ ! -w "$WORKDIR" ]]; then
+    WORKDIR="${TMPDIR:-/tmp}/jetson_uart_dma_iommu_universal-$(id -un)"
+    mkdir -p "$WORKDIR" || die "Cannot create a writable work directory ($WORKDIR)"
+  fi
 }
 
 dump_live_dts() {
@@ -289,41 +305,93 @@ compile_and_install_dtb() {
   cp "$COMPILED_DTB" "$PATCHED_DTB"
 }
 
-update_extlinux_to_use_patched_dtb() {
-  [[ -f "$EXTLINUX" ]] || die "Missing $EXTLINUX"
-  [[ ! -f "$BACKUP_EXTLINUX" ]] && cp "$EXTLINUX" "$BACKUP_EXTLINUX"
-
-  python_helper "$EXTLINUX" "$PATCHED_DTB" <<'PY'
+# Rewrite one extlinux.conf-shaped file in place so that "LABEL primary" holds
+# exactly one FDT line, immediately after its LINUX line.
+#
+#   rewrite_extlinux_file <file> <dtb-path>
+#
+# Deliberately takes the file as an argument (rather than always touching
+# $EXTLINUX) so the transformation can be unit-tested on a copy without root --
+# see host/tests/test_extlinux_fix.sh and `apply --dry-run`.
+rewrite_extlinux_file() {
+  local target="$1" dtb="$2"
+  python_helper "$target" "$dtb" <<'PY'
 import re, sys
 from pathlib import Path
+
 extlinux = Path(sys.argv[1])
 dtb_path = sys.argv[2]
-text = extlinux.read_text()
+lines = extlinux.read_text().splitlines()
 
-lines = text.splitlines()
 out = []
 in_primary = False
 inserted = False
 
 for line in lines:
     stripped = line.strip()
+
+    # Comments are passed through untouched and never change block state --
+    # extlinux.conf ships with a commented-out "# LABEL backup" stanza.
+    if stripped.startswith("#"):
+        out.append(line)
+        continue
+
     if stripped.startswith("LABEL "):
         in_primary = stripped == "LABEL primary"
+
+    # Pre-pass: drop EVERY pre-existing FDT inside LABEL primary. The old code
+    # rewrote the first one it met *after* already inserting a new one after
+    # LINUX, so each run grew the file by one duplicate line (bug #2).
     if in_primary and re.match(r'^\s*FDT\s+', line):
-        out.append(re.sub(r'^\s*FDT\s+.*$', '      FDT ' + dtb_path, line))
-        inserted = True
         continue
+
     out.append(line)
+
     if in_primary and re.match(r'^\s*LINUX\s+', line) and not inserted:
         out.append('      FDT ' + dtb_path)
         inserted = True
 
 if not inserted:
-    raise SystemExit("Could not insert FDT line in extlinux.conf")
+    raise SystemExit("Could not insert FDT line in extlinux.conf: "
+                     "no LINUX line found inside 'LABEL primary'")
 
 extlinux.write_text("\n".join(out) + "\n")
-print("extlinux.conf points to", dtb_path)
+print("extlinux FDT ->", dtb_path)
 PY
+}
+
+update_extlinux_to_use_patched_dtb() {
+  [[ -f "$EXTLINUX" ]] || die "Missing $EXTLINUX"
+  [[ ! -f "$BACKUP_EXTLINUX" ]] && cp "$EXTLINUX" "$BACKUP_EXTLINUX"
+  rewrite_extlinux_file "$EXTLINUX" "$PATCHED_DTB"
+}
+
+# True when the patch is already live on this boot. All three probes are
+# readable without root, so `apply` can short-circuit before need_root.
+already_applied() {
+  [[ -e /proc/device-tree/bus@0/serial@3100000/iommus ]] || return 1
+  [[ -f "$PATCHED_DTB" ]]                                || return 1
+  [[ -f "$EXTLINUX" ]]                                   || return 1
+  grep -qE "^[[:space:]]*FDT[[:space:]]+${PATCHED_DTB}[[:space:]]*$" "$EXTLINUX" || return 1
+  return 0
+}
+
+# Show what `apply` would do to extlinux.conf, without root and without
+# touching /boot. Operates on a copy under $WORKDIR.
+dry_run_extlinux() {
+  make_workdir
+  [[ -f "$EXTLINUX" ]] || die "Missing $EXTLINUX"
+  local copy="$WORKDIR/extlinux.conf.dryrun"
+  cp "$EXTLINUX" "$copy"
+  rewrite_extlinux_file "$copy" "$PATCHED_DTB" >/dev/null
+  echo "=== dry run: diff $EXTLINUX -> proposed ==="
+  if diff -u "$EXTLINUX" "$copy" --label "a/$EXTLINUX" --label "b/$EXTLINUX"; then
+    echo "(no change -- extlinux.conf is already correct)"
+  fi
+  echo
+  echo "FDT lines inside LABEL primary after rewrite:"
+  grep -cE '^[[:space:]]*FDT[[:space:]]' "$copy" | sed 's/^/  /'
+  log "Dry run only. Nothing was written to $EXTLINUX or /boot."
 }
 
 verify_staged_dtb() {
@@ -371,6 +439,16 @@ restore_previous() {
 }
 
 apply_fix() {
+  local force="${1:-0}"
+
+  # Cheapest exit first: if the patch is already live there is nothing to do,
+  # and detecting that needs no privileges.
+  if [[ "$force" -ne 1 ]] && already_applied; then
+    log "already applied -- serial@3100000 has iommus in the live DT, $PATCHED_DTB exists,"
+    log "and $EXTLINUX points at it. Nothing to do (pass --force to rewrite anyway)."
+    return 0
+  fi
+
   need_root
   ensure_tools
   assert_supported_platform
@@ -394,30 +472,62 @@ apply_fix() {
 main() {
   local mode="${1:-}"
   local do_reboot=0
+  local dry_run=0
+  local force=0
+
   case "$mode" in
     apply|status|restore) shift ;;
+    rewrite-extlinux)
+      # Helper entry point for host/tests/test_extlinux_fix.sh. Rewrites the
+      # given file in place; never touches /boot unless you point it there.
+      shift
+      [[ $# -eq 2 ]] || die "Usage: $SCRIPT_NAME rewrite-extlinux <file> <dtb-path>"
+      need_cmd python3
+      rewrite_extlinux_file "$1" "$2"
+      exit 0
+      ;;
     -h|--help|'') usage; exit 0 ;;
     *) usage; die "Unknown mode: $mode" ;;
   esac
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --reboot) do_reboot=1; shift ;;
+      --reboot)  do_reboot=1; shift ;;
+      --dry-run) dry_run=1; shift ;;
+      --force)   force=1; shift ;;
       *) die "Unknown argument: $1" ;;
     esac
   done
 
   case "$mode" in
     apply)
-      apply_fix
-      [[ $do_reboot -eq 1 ]] && { log "Rebooting now..."; reboot; }
+      if [[ $dry_run -eq 1 ]]; then
+        need_cmd python3
+        dry_run_extlinux
+        exit 0
+      fi
+      apply_fix "$force"
+      if [[ $do_reboot -eq 1 ]]; then
+        log "Rebooting now..."
+        reboot
+      fi
+      # Bug #1: this used to be a bare `[[ ... ]] && { ...; }` list, which
+      # returns 1 when --reboot is absent. As the last command of main -- itself
+      # the last command of the script under `set -Eeuo pipefail` -- that made a
+      # successful apply exit 1, aborting every caller.
+      exit 0
       ;;
     status)
       status_report
+      exit 0
       ;;
     restore)
       restore_previous
-      [[ $do_reboot -eq 1 ]] && { log "Rebooting now..."; reboot; }
+      if [[ $do_reboot -eq 1 ]]; then
+        log "Rebooting now..."
+        reboot
+      fi
+      exit 0
       ;;
   esac
 }

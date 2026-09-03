@@ -1,0 +1,19 @@
+# Onboard parameters for Vehicle 1
+#
+# STAGE 3a - HEIGHT REFERENCE ONLY. Independent of vision, UART and the container.
+#
+# This is the runaway-climb fix and it works on the vehicle as it stands today.
+# Nothing here depends on external vision, so it is safe to apply before the
+# UART link is repaired.
+#
+# Current state (May 7 dump):  EKF2_HGT_REF = 2 (Range), EKF2_BARO_CTRL = 0 (off).
+# Above EKF2_RNG_A_HMAX (5.0 m) the rangefinder stops aiding, and with baro
+# disabled there is then NO height aiding at all - the altitude estimate free-runs,
+# the controller reads it as sinking, and commands a climb that never terminates.
+#
+# After loading: reboot the FC, then hover-test in position hold and confirm the
+# altitude holds. Props off first; watch /fmu/out/vehicle_local_position z.
+#
+# Vehicle-Id	Component-Id	Name	Value	Type
+1	1	EKF2_HGT_REF	0	6
+1	1	EKF2_BARO_CTRL	1	6

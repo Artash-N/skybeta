@@ -8,6 +8,10 @@
 
   <exec_depend>depthai_ros_driver_v3</exec_depend>
   <exec_depend>isaac_ros_visual_slam</exec_depend>
+  <!-- ImageFormatConverterNode: GPU bgr8 -&gt; mono8, replaces the Python bgr_to_mono -->
+  <exec_depend>isaac_ros_image_proc</exec_depend>
+  <!-- VisualSlamStatus.vo_state drives VehicleOdometry.reset_counter -->
+  <exec_depend>isaac_ros_visual_slam_interfaces</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
@@ -16,6 +20,8 @@
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>px4_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

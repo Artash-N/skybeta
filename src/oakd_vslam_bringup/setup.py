@@ -15,9 +15,9 @@ setup(
         ('share/' + package_name + '/config', glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'bgr_to_mono = oakd_vslam_bringup.bgr_to_mono:main',
             'px4_odom_bridge = oakd_vslam_bringup.px4_odom_bridge:main',
         ],
     },

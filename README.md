@@ -1,214 +1,488 @@
 # skybeta
 
-Self-contained Jetson image for a Pixhawk-paired drone:
+A GPS-denied autonomy stack for a Jetson Orin Nano paired with a Pixhawk 6C, shipped as
+one container image. **Fork it and write your navigation code in `src/`** — everything
+below your setpoints is already built, measured and documented.
 
-- **cuVSLAM** on an OAK-D-S2 (visual odometry @ ~30 Hz, replaces optical flow)
-- **PX4 bridge** publishing `/fmu/in/vehicle_visual_odometry` (ENU→NED + FLU→FRD, BEST_EFFORT QoS)
-- **Micro-XRCE-DDS-Agent v2.4.3** speaking to PX4 v1.14 over `/dev/ttyTHS1` @ 921600
-- **MAVProxy** for the initial UART sanity test (§3 of the setup doc)
+Two audiences, two starting points:
 
-The Dockerfile builds one image (~18–22 GB) on the NGC Isaac ROS base. Distribute to other Jetsons via `docker save | docker load` or a registry — host scripts handle the few things a container can't (UART DMA patch, OAK-D udev rule, docker daemon's nvidia runtime).
+- **Competitors** → [quick start](#quick-start--competitor), then
+  [`docs/competitor_guide.md`](docs/competitor_guide.md).
+- **Fleet operators** bringing up ten-plus identical drones →
+  [quick start](#quick-start--fleet-operator), then
+  [`docs/fleet_guide.md`](docs/fleet_guide.md).
 
-## What runs where
+---
 
-| Section of [`jetson_pixhawk_uxrce_ros2_setup.md`](jetson_pixhawk_uxrce_ros2_setup.md) | Where |
+## What this is
+
+An OAK-D-S2 stereo camera feeds NVIDIA's **cuVSLAM** on the Jetson's GPU. The resulting
+visual odometry is converted to PX4's frame conventions and pushed to the flight
+controller over **uXRCE-DDS** on `/dev/ttyTHS1`, where EKF2 fuses it as external vision.
+The vehicle then knows where it is with no GPS and no optical flow.
+
+### The data path
+
+```
+OAK-D-S2  ──USB3──▶  depthai-ros v3 driver     /oak/{left,right}/image_raw   bgr8, 1024x640 @30 Hz
+                              │
+                              ▼
+                     isaac_ros_image_proc      /oak/{left,right}/image_mono  mono8, GPU convert
+                     ImageFormatConverterNode
+                              │
+                              ▼
+                     cuVSLAM (isaac_ros_visual_slam 3.2.6)
+                              │
+                              ▼               /visual_slam/tracking/odometry  ENU, ~30 Hz
+                     px4_odom_bridge          ENU->NED, FLU->FRD
+                              │
+                              ▼               /fmu/in/vehicle_visual_odometry
+                     MicroXRCEAgent v2.4.3
+                              │
+                        UART 921600
+                              ▼
+                     PX4 v1.16.2  EKF2
+```
+
+### Your code sits here
+
+```
+/visual_slam/tracking/odometry  ──▶  your node  ──▶  /skybeta/setpoint/{pose,twist}
+                                                              │
+                                                              ▼
+                                                  skybeta_flight_interface
+                                        geofence + altitude + speed clamp,
+                                        10 Hz OffboardControlMode heartbeat,
+                                        ENU<->NED
+                                                              │
+                                                              ▼
+                                        /fmu/in/trajectory_setpoint  ──▶  PX4
+```
+
+**There is always a safety pilot on RC.** The flight interface has **no arm path** and
+never changes mode. The pilot arms, the pilot selects Offboard from the transmitter, and
+the pilot can take the vehicle back at any instant. Nothing you write may assume
+otherwise.
+
+---
+
+## Hardware
+
+| | |
 |---|---|
-| §1 Jetson UART DMA fix | host (`02_uart_fix.sh` → `jetson_uart_dma_fix.sh apply` + reboot) |
-| §2 Wire Pixhawk TELEM2 | hardware |
-| §3 MAVProxy sanity test | container (`mavproxy.py` baked in) |
-| §4 PX4 / QGC params | Pixhawk side (set via QGroundControl) |
-| §5 Micro-XRCE-DDS-Agent v2.4.3 | container (`run_agent.sh` on `$PATH`) |
-| §6 ROS workspace (px4_msgs + oakd_vslam_bringup) | container (`/root/skybeta_ws/install`, colcon-built) |
-| §7/§8/§10 Run agent + verify | container (`run_full_stack.sh`, `check_topics.sh`) |
-| cuVSLAM + camera-offset TF | container (`run_slam.sh`) |
-| ENU→NED + FLU→FRD bridge | container (`run_bridge.sh`) |
+| Companion computer | **Jetson Orin Nano Super**, JetPack 6.x / L4T R36.5.0, Ubuntu 22.04 |
+| Camera | **OAK-D-S2** — `OV9282` monochrome stereo pair, `IMX378` colour, BNO086 IMU |
+| Flight controller | **Pixhawk 6C**, PX4 **v1.16.2** (vendored: [`px4/firmware/`](px4/firmware/)) |
+| Link | TELEM2 ↔ Jetson 40-pin header pins 8/10, `/dev/ttyTHS1` @ 921600, uXRCE-DDS |
+| Radio | Safety pilot's RC, with a tested kill switch |
 
-## One-shot setup (fresh Jetson)
+Physical build and pre-flight checks, each tied to the failure it prevents:
+[`docs/hardware_checklist.md`](docs/hardware_checklist.md).
 
-```bash
-./setup_and_build.sh        # 01 prereqs + 02 UART patch (reboots) + 03 image build
-```
+Two hardware facts worth knowing before you measure anything:
 
-Re-run the script after the reboot to finish the image build. First build pulls ~8 GB NGC base + apt + colcon → 30–40 min on Orin Nano. Subsequent builds with no source change are cached in seconds.
+- **The camera runs at 1024×640 @ 30 Hz, not the sensor's native resolution.** The
+  MyriadX's XLink transport ceiling is ~143 MB/s, and at native resolution both eyes drop
+  *different* frames — 23.3 Hz with left/right stamps a whole frame apart, and cuVSLAM
+  odometry collapsing to 16.4 Hz. 1024×640 measures a clean 30.0 Hz at 118 MB/s and 2.56×
+  the pixels of the old accidental 640×400 default.
+- **The OAK-D enumerates twice.** Unbooted it is `03e7:2485` at 480 Mbps; once depthai
+  pushes firmware it re-appears as `03e7:f63b` at 5000 Mbps. Any bandwidth reasoning based
+  on the pre-boot `lsusb` reading is wrong.
 
-## Run the full stack
+---
 
-```bash
-./run_pipeline.sh                       # camera at body origin
-./run_pipeline.sh 0.10 0.0 -0.02        # camera_x camera_y camera_z (FLU, meters)
-```
+## Quick start — competitor
 
-Drops you into a tmux session inside the container with three windows: `agent`, `slam`, `bridge`. `Ctrl-b 0..2` switches; `Ctrl-b d` detaches. Exit the container or `tmux kill-session -t skybeta` tears everything down.
-
-Verify from a host shell:
-
-```bash
-docker exec -it skybeta-pipeline bash -lc \
-  'source install/setup.bash && ros2 topic hz /fmu/in/vehicle_visual_odometry'
-```
-
-Expect ~30 Hz once cuVSLAM is tracking. On the Pixhawk MAVLink console, `uxrce_dds_client status` should show `/fmu/in/vehicle_visual_odometry` subscribed with `recv > 0`.
-
-## Step-by-step (instead of one-shot)
+You need a provisioned Jetson (your fleet operator did step 3 of the
+[fleet guide](docs/fleet_guide.md)) and the OAK-D plugged in **before** you start the
+container.
 
 ```bash
-./01_prereqs.sh             # apt deps, docker nvidia runtime, OAK-D udev
-./02_uart_fix.sh            # device-tree patch + reboot           (host, one-time)
-./02b_uart_fix_verify.sh    # after reboot: confirm "Adding to iommu group"
-./03_build_image.sh         # docker build -t skybeta:latest .
-./run_pipeline.sh           # full stack in one tmux'd container
+git clone <your fork of skybeta> && cd skybeta
+
+# 1. Get the image. REGISTRY is wherever your fleet's images live.
+export REGISTRY=<your-registry>/<your-org>
+host/pull_image.sh $(cat VERSION)
+
+# 2. Check the machine is healthy.
+host/doctor.sh
+
+# 3. Run the stack. Arguments are the camera mount pose: x y z (m) roll pitch yaw (rad),
+#    FLU, measured from the Pixhawk's primary IMU to the left lens.
+host/run.sh stack 0.10 0 -0.02 0 0.35 0
 ```
 
-## Interactive container (for poking around / MAVProxy / individual launches)
+That opens a tmux session with four windows — `agent`, `slam`, `bridge`, `competitor`.
+`Ctrl-b 0..3` switches, `Ctrl-b d` detaches.
+
+### Where to write your code
+
+```
+src/competitor_example/competitor_example/square_mission.py    <- copy this
+```
+
+It is a heavily commented Python node that waits for Offboard, captures a start pose,
+publishes ENU setpoints on a timer, checks arrival, and notices when the pilot takes over.
+Fork it into your own package and point the launcher at it:
 
 ```bash
-./04_run_container.sh       # drops into bash inside skybeta:latest
-# inside the container — every command is on $PATH:
-run_agent.sh                # MicroXRCEAgent only
-run_slam.sh                 # cuVSLAM only
-run_bridge.sh               # PX4 odom bridge only
-check_topics.sh             # ros2 topic list + timesync_status echo
-mavproxy.py --master=/dev/ttyTHS1,57600   # §3 MAVLink sanity test
+COMPETITOR_PKG=my_team_nav COMPETITOR_LAUNCH=my_mission.launch.py host/run.sh stack
 ```
 
-Re-running `./04_run_container.sh` from a second host shell attaches a new bash to the same container.
+Three topics are the entire interface:
 
-## Inside the image
-
-Base: `nvcr.io/nvidia/isaac/ros:aarch64-ros2_humble_4c0c55dddd2bbcc3e8d5f9753bee634c` — same NGC Isaac ROS Humble image that `isaac_ros_common`'s `run_dev.sh` pulls (the bare `aarch64-ros2_humble` tag does not exist on NGC, only the content-addressed variants). Pinned by hash so every Jetson in a fleet builds against the exact same base. JetPack 6.x / L4T R36.x compatible. aarch64-only.
-
-| Layer | Step | Purpose |
+| Topic | Type | Direction |
 |---|---|---|
-| 1 | apt | `depthai-ros-driver-v3`, `isaac-ros-visual-slam`, NITROS imu/odometry types, build deps, tmux. Kept in one RUN so the ~3 GB layer caches as a unit. |
-| 2 | pip | `depthai` (runtime), `MAVProxy` (§3 UART sanity test) |
-| 3 | udev | `03e7` OAK-D rule baked in (also installed on host by `01_prereqs.sh`) |
-| 4 | git+cmake | Micro-XRCE-DDS-Agent **v2.4.3** built from source. v3 is wire-incompatible with PX4 v1.14. |
-| 5 | colcon | `/root/skybeta_ws` with `px4_msgs @ release/1.14` + `oakd_vslam_bringup` |
-| 6 | COPY | `container_scripts/` onto `/usr/local/bin`, so `run_agent.sh` etc. are callable by name |
-| 7 | bashrc | Auto-source `/opt/ros/humble` + the workspace overlay for every interactive shell |
+| `/visual_slam/tracking/odometry` | `nav_msgs/Odometry` | you **subscribe** — ENU pose in `odom` |
+| `/skybeta/setpoint/pose` | `geometry_msgs/PoseStamped` | you **publish** — ENU position + yaw |
+| `/skybeta/state` | `std_msgs/String` (JSON) | you **subscribe** — what PX4 is doing |
 
-Resulting image is ~13 GB unpacked (most of it depthai + Isaac ROS apt packages from layer 1).
+**Do not publish to `/fmu/in/*` yourself.** Two publishers on `offboard_control_mode`
+fight over the control flags and PX4 sees whichever arrived last.
 
-### Runtime configuration
+**→ Read [`docs/competitor_guide.md`](docs/competitor_guide.md) next.** It covers the
+frame conventions (including the one caveat nobody can fix for you), the safety envelope
+and what a clamped setpoint looks like, `/skybeta/state`, the RC/arming procedure, and the
+advanced C++ track that registers a custom PX4 flight mode.
 
-`run_pipeline.sh` and `04_run_container.sh` both `docker run` with:
+No drone in hand? See [simulation](#simulation).
 
-| Flag | Why |
-|---|---|
-| `--privileged --runtime nvidia` | GPU access for cuVSLAM (NITROS) |
-| `--network host --ipc host` | DDS discovery + shared-memory transport across other ROS 2 nodes on the Jetson |
-| `-v /dev:/dev -v /dev/bus/usb:/dev/bus/usb` | OAK-D hotplug + UART devices visible inside |
-| `--device /dev/ttyTHS1:/dev/ttyTHS1` | Pixhawk UART passthrough (added only if the host has it) |
-| `-e DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix` | X11 forwarding so `rviz2` can render to the host display |
-| `-e XRCE_DEV=... -e CAMERA_X/Y/Z=...` | Override the UART path or camera offset without editing scripts |
+---
 
-### Topics published / subscribed
+## Quick start — fleet operator
 
-| Direction | Topic | QoS | Source |
-|---|---|---|---|
-| pub | `/visual_slam/tracking/odometry` | RELIABLE / VOLATILE | cuVSLAM |
-| pub | `/visual_slam/vis/landmarks_cloud` | RELIABLE / VOLATILE | cuVSLAM |
-| pub | `/visual_slam/status` | RELIABLE / VOLATILE | cuVSLAM |
-| pub | `/oak/left/image_raw`, `/oak/right/image_raw`, `/oak/imu/data` | BEST_EFFORT | depthai driver |
-| pub | `/fmu/in/vehicle_visual_odometry` | **BEST_EFFORT / VOLATILE** | `px4_odom_bridge.py` — PX4 v1.14 expects this exact QoS |
-| sub | `/fmu/out/timesync_status` | BEST_EFFORT / TRANSIENT_LOCAL | uXRCE-DDS Agent ← PX4 |
+Bringing up an airframe from a bare board, in order. Each step has a verification command
+whose output must match before you move on.
 
-TF tree: `map → odom → base_link → oak` (the static `base_link → oak` is the camera offset).
+```
+1  Flash PX4 v1.16.2                    px4/firmware/         (erases all parameters)
+2  Load 00_baseline.params, then
+   calibrate THIS airframe in QGC       px4/params/           (never clone calibration)
+3  host/provision.sh                    Jetson                (one reboot, then resume)
+4  Load 01_telem2_mavlink.params        prove the wire        mavproxy HEARTBEAT
+5  Load 02_telem2_uxrce_dds.params      prove the data        check_topics.sh echoes
+6  Load 03a_height_reference.params     bench hover           altitude holds
+7  Measure EKF2_EV_DELAY, then 03b      EV fusion             cs_ev_pos / cs_ev_yaw true
+8  Save px4/params/fleet/<serial>.params + tools/param_diff.py -> zero drift
+```
 
-### Camera offset (PX4 body frame)
+**→ [`docs/fleet_guide.md`](docs/fleet_guide.md)** has each step in full, with the
+expected output, the failure modes, and a fleet table template.
 
-`./run_pipeline.sh <x> <y> <z>` passes a static TF from `base_link` to the OAK-D's left camera focal point, in meters, FLU body axes:
+The two things most often got wrong:
 
-- **Origin**: Pixhawk's **primary IMU** location, *not* CoG / GPS antenna / frame center. PX4 defines the body frame at the IMU; all sensor offsets must be measured from there or the lever-arm during rotation breaks EKF2 fusion.
-- **Target**: left stereo lens focal point of the OAK-D-S2 (cuVSLAM uses the left camera as the optical center).
-- **Axes (FLU)**: +x forward (direction of the Pixhawk's mounting arrow), +y left, +z up.
+- **Step 2.** Accelerometer, magnetometer, level-horizon and RC calibration are properties
+  of *one* board, in *one* orientation, wired to *one* receiver. Clone them between drones
+  and you get a vehicle that believes it is level when it is not — a silent failure with no
+  error message anywhere. `00_baseline.params` excludes them by construction; its header
+  lists exactly what was stripped and why.
+- **Step 5.** A topic list is not a pass. `ros2 topic list` showing fifty `/fmu/*` topics
+  only proves the agent built a session and created the datawriters. **The pass condition
+  is a `--once` echo returning a sample**, which is what `check_topics.sh` does.
 
-Worked example — OAK-D 10 cm in front of the Pixhawk, on centerline, 2 cm below:
+Drift control, any time:
 
 ```bash
-./run_pipeline.sh 0.10 0.0 -0.02
+tools/param_diff.py --dump px4/params/fleet/SN0001.params   # exit 0 == no drift
+tools/param_diff.py --master /dev/ttyTHS1,57600             # against a live FC
+tools/param_diff.py --selftest                              # no hardware needed
 ```
 
-If unsure of your Pixhawk's exact IMU location, the case center is within a few mm on most boards; check the board datasheet for the IMU stack offset.
-
-### Debugging the container
-
-```bash
-docker logs -f skybeta-pipeline                  # combined stdout (tmux noise)
-docker exec -it skybeta-pipeline bash            # new interactive shell
-docker exec -it skybeta-pipeline tmux attach -t skybeta   # reattach if you detached
-```
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `AMENT_TRACE_SETUP_FILES: unbound variable` and pane dies | `set -u` + ROS 2 setup script that touches unset vars | Already wrapped with `set +u/-u` in all `container_scripts/*.sh` |
-| `ERROR: container 'skybeta' already running` | `04_run_container.sh` left a container that would clash with `run_pipeline.sh` on the UART | `docker rm -f skybeta` |
-| `nvcr.io/nvidia/isaac/ros:... not found` at build | NGC base hash tag not cached and no NGC login | `docker pull nvcr.io/nvidia/isaac/ros:aarch64-ros2_humble_4c0c55dddd2bbcc3e8d5f9753bee634c` (or build `isaac_ros_common` once which pulls it) |
-| `X_LINK_UNBOOTED` / `Skipping X_LINK_UNBOOTED device` | OAK-D enumerated *after* container start, hot-plug not seen | Plug OAK-D in **before** `run_pipeline.sh`, then verify with `lsusb \| grep 03e7` |
-| RViz from inside the container shows blank / "cannot connect" | Host hasn't permitted X | On host: `xhost +local:root` |
-| `uxrce_dds_client status` shows 0 subscribers | PX4 params not set, or wrong baud | Recheck `MAV_1_CONFIG=0`, `UXRCE_DDS_CFG=TELEM2`, `SER_TEL2_BAUD=921600`, reboot Pixhawk |
-| `/fmu/in/vehicle_visual_odometry` publishing but EKF2 not fusing | QoS mismatch | Bridge already pins BEST_EFFORT / VOLATILE — if you wrote a replacement, match it exactly |
-
-### Rebuilding after a code change
-
-```bash
-./03_build_image.sh        # layer cache hits everything that didn't change
-```
-
-- Edit `container_scripts/*.sh` → only layer 6 rebuilds (~1 s)
-- Edit `src/oakd_vslam_bringup/` → layer 5 (colcon) rebuilds (~7 min on Orin Nano) + layers 6+ on top
-- Change `XRCE_AGENT_TAG` or any apt line → all downstream layers rebuild (~20 min)
-
-## PX4 / QGC parameters (Pixhawk side, manual)
-
-Set in QGroundControl and reboot the Pixhawk:
-
-```text
-MAV_1_CONFIG    = 0
-UXRCE_DDS_CFG   = TELEM2
-SER_TEL2_BAUD   = 921600
-EKF2_EV_CTRL    = bits 0+3 (horiz pos + yaw)   # add bit 1 for vert pos / bit 2 for vel later
-EKF2_HGT_REF    = Baro                         # keep until vision altitude is trusted
-EKF2_EV_DELAY   = 50 (ms)
-EKF2_EVP_NOISE  = 0.1
-EKF2_EVV_NOISE  = 0.1
-EKF2_EVA_NOISE  = 0.05
-```
-
-## Fleet distribution
-
-```bash
-# On the build Jetson:
-docker save skybeta:latest -o skybeta.tar
-zstd -19 skybeta.tar -o skybeta.tar.zst       # ~6–8 GB compressed
-
-# On a fresh Jetson (after ./01_prereqs.sh + ./02_uart_fix.sh + reboot):
-zstd -d skybeta.tar.zst -o skybeta.tar
-docker load -i skybeta.tar
-./run_pipeline.sh 0.10 0.0 -0.02
-```
-
-The image is **aarch64-only** (NGC Isaac ROS base has no amd64 manifest) — by design, since cuVSLAM and NITROS only ship precompiled for Jetson.
+---
 
 ## Repo layout
 
 ```
 skybeta/
-├── Dockerfile                      # NGC base + apt + agent + workspace
-├── 01_prereqs.sh                   # host: apt + docker daemon + OAK-D udev
-├── 02_uart_fix.sh                  # host: UART DMA patch + reboot
-├── 02b_uart_fix_verify.sh          # host: post-reboot status check
-├── 03_build_image.sh               # host: docker build
-├── 04_run_container.sh             # host: docker run -> interactive bash
-├── run_pipeline.sh                 # host: docker run -> tmux'd full stack
-├── setup_and_build.sh              # host: 01 -> 02 -> 03 one-shot
-├── jetson_pixhawk_uxrce_ros2_setup.md   # the canonical setup reference
-├── jetson_uart_dma_fix.sh          # UART DMA / IOMMU patcher (host-only)
-├── container_scripts/              # baked into /usr/local/bin in the image
-│   ├── run_agent.sh                # MicroXRCEAgent serial
-│   ├── run_slam.sh                 # ros2 launch oakd_vslam.launch.py
-│   ├── run_bridge.sh               # ros2 launch px4_bridge.launch.py
-│   ├── run_full_stack.sh           # tmux session of all three above
-│   └── check_topics.sh             # verify topics
-└── src/oakd_vslam_bringup/         # ROS package: cuVSLAM launch + bridge node
+├── VERSION                          semver for the image tag
+├── CLAUDE.md                        the record: measurements, bug list, what is unverified
+├── jetson_pixhawk_uxrce_ros2_setup.md   the original hardware/PX4 procedure
+├── container_scripts/               baked onto $PATH inside the image
+│   ├── check_topics.sh              the real bug-#8 test: echo, not topic count
+│   ├── record_bag.sh                mcap recording of the flight-debug topic set
+│   ├── run_agent.sh                 MicroXRCEAgent, serial or udp4
+│   ├── run_bridge.sh                px4_odom_bridge
+│   ├── run_full_stack.sh            tmux: agent, slam, bridge, competitor
+│   └── run_slam.sh                  camera + converters + cuVSLAM
+├── docker/
+│   ├── Dockerfile.jetson            aarch64: NGC base + apt + agent + workspace
+│   ├── Dockerfile.sim               x86_64 twin for the Isaac Sim profile
+│   ├── apt-pins.txt                 audit record of the exact versions in the image
+│   └── ros-snapshots.key.asc        signing key for snapshots.ros.org
+├── docs/
+│   ├── competitor_guide.md          the API, the envelope, RC procedure, C++ track
+│   ├── fleet_guide.md               per-drone bring-up, 8 verified steps
+│   ├── hardware_checklist.md        build-time + pre-flight physical checks
+│   └── debugging.md                 symptom -> cause -> fix
+├── host/                            things a container cannot do for itself
+│   ├── README.md
+│   ├── provision.sh                 one idempotent, resumable entry point
+│   ├── doctor.sh                    ten unprivileged health checks; non-zero on any FAIL
+│   ├── run.sh                       stack | shell | bag | sim
+│   ├── build_image.sh
+│   ├── pull_image.sh                base-first, so each drone transfers the delta
+│   ├── push_image.sh
+│   ├── jetson_uart_dma_fix.sh       the R36.5 UARTA DMA/IOMMU device-tree patch
+│   ├── uart_loopback_test.py        jumper pins 8+10 and prove the Jetson side
+│   └── tests/test_extlinux_fix.sh
+├── px4/
+│   ├── firmware/                    px4_fmu-v6c_default-v1.16.2.px4 + .sha256 + README
+│   └── params/
+│       ├── README.md                the staged files and the order they go in
+│       ├── 00_baseline.params       927 fleet-common parameters, no calibration
+│       ├── 01_telem2_mavlink.params      TELEM2 -> MAVLink, proves the wire
+│       ├── 02_telem2_uxrce_dds.params    TELEM2 -> uXRCE-DDS
+│       ├── 03a_height_reference.params   baro height aiding (the runaway-climb fix)
+│       ├── 03b_ekf2_vision.params        EV fusion
+│       └── fleet/                   per-drone saved baselines: <serial>.params
+├── sim/                             Isaac Sim 5.1.0 + Pegasus v5.1.0 + PX4 SITL, x86 only
+│   ├── README.md                    ordered spike checklist
+│   ├── pegasus_skybeta.py           the Isaac Sim app (host)
+│   ├── px4_sitl.env                 SITL environment + param block (host)
+│   └── skybeta_sim.launch.py        the stack, sim remaps (container)
+├── src/
+│   ├── competitor_example/          COPY THIS -- Python, hover -> 5 m square
+│   ├── competitor_advanced_cpp/     advanced -- px4_ros2_cpp custom flight mode
+│   ├── skybeta_flight_interface/    do not modify -- heartbeat, frames, safety envelope
+│   └── oakd_vslam_bringup/          camera + cuVSLAM launch + the PX4 odometry bridge
+└── tools/
+    ├── latency_probe.py             measure the real EKF2_EV_DELAY
+    └── param_diff.py                fleet drift check; --selftest needs no hardware
 ```
+
+---
+
+## Inside the image
+
+Base: `nvcr.io/nvidia/isaac/ros:aarch64-ros2_humble_4c0c55dddd2bbcc3e8d5f9753bee634c` —
+the same NGC Isaac ROS Humble image `isaac_ros_common`'s `run_dev.sh` pulls, pinned by
+content hash so every Jetson in a fleet builds against identical bits. The bare
+`aarch64-ros2_humble` tag does not exist on NGC, only the content-addressed variants.
+**aarch64-only** — there is no amd64 manifest, by design, since cuVSLAM and NITROS ship
+precompiled for Jetson.
+
+| Layer | Step | Contents |
+|---|---|---|
+| 0 | apt source | `packages.ros.org/ros2` (rolling) replaced by `snapshots.ros.org/humble/2026-08-07`, so a rebuild months later resolves the same versions. `ros2-testing` is **not** installed |
+| 1 | apt | `depthai-ros-driver-v3` **3.3.0**, `isaac-ros-visual-slam` **3.2.6**, NITROS imu/odometry types, `diagnostic-updater` (see below), eigen, build deps, tmux. One `RUN`, so the ~3 GB layer caches as a unit |
+| 2 | pip | `depthai` runtime, `MAVProxy` for the stage-01 UART test |
+| 3 | udev | the `03e7` OAK-D rule |
+| 4 | git+cmake | **Micro-XRCE-DDS-Agent v2.4.3**, built from source |
+| 5 | colcon | `/root/skybeta_ws`: `px4_msgs @ release/1.16`, `px4-ros2-interface-lib @ release/1.16`, and the four first-party packages from `src/` |
+| 6 | COPY | `container_scripts/` onto `/usr/local/bin`, callable by name |
+| 7 | bashrc | auto-source `/opt/ros/humble` + the workspace overlay |
+| 8 | LABEL | provenance: ROS snapshot date, PX4 firmware, git refs, agent tag |
+
+### Sizes, and why the pull script exists
+
+| | |
+|---|---|
+| Full image on disk | **42.6 GB** |
+| Shared public NGC base | **40.3 GB** |
+| **skybeta delta** | **~2.3 GB** |
+
+The delta is the number that matters for fleet distribution. `host/pull_image.sh` fetches
+the NGC base from `nvcr.io` **first**, so the registry pull then finds every base layer
+already present and transfers only the delta. Pull skybeta first and you drag 42.6 GB
+across the venue network, once per drone.
+
+### Pins, and the reasons for them
+
+| Pin | Value | Why |
+|---|---|---|
+| PX4 firmware | **v1.16.2** | what the flight controller runs; vendored with its sha256 |
+| `px4_msgs` | `release/1.16` | uXRCE-DDS matches on message definition. The installed `VehicleOdometry.msg` carries `MESSAGE_VERSION`, which is the quick proof of the generation |
+| `px4-ros2-interface-lib` | `release/1.16` | the advanced C++ track (`px4_ros2_cpp`) |
+| Micro-XRCE-DDS-Agent | **v2.4.3** | the tag PX4's own v1.16 ROS 2 user guide specifies. Do not bump it to v3.x |
+| ROS apt snapshot | `2026-08-07` | `packages.ros.org/ros2` is a rolling repo; two builds of a "pinned" Dockerfile weeks apart genuinely resolve different candidates |
+| Isaac ROS apt | NVIDIA `release-3` | already a pinned channel, in `/etc/apt/sources.list` in the base — the snapshot swap leaves it alone |
+
+`ros-humble-diagnostic-updater` is named explicitly in the apt list on purpose. The NGC
+base ships 4.0.6, which contains **only the Python module** — no `libdiagnostic_updater.so`
+— so apt considers the depthai driver's dependency satisfied, never upgrades it, and the
+driver's composable node dies at load with `cannot open shared object file`. Naming the
+package pulls 4.0.7, which ships the library. Expect more of this shape: the base carries
+pre-installed ROS packages apt will not upgrade just because something depends on them.
+
+`px4_msgs` and `px4-ros2-interface-lib` are cloned by *branch*, so two builds can still
+drift. Pass `--build-arg PX4_MSGS_REF=<sha>` to freeze them; the SHAs actually used are
+written to `/root/skybeta_ws/px4_msgs.sha` and `px4_ros2_lib.sha` inside every image.
+
+### Building and distributing
+
+```bash
+host/build_image.sh                 # context = repo root, -f docker/Dockerfile.jetson
+host/build_image.sh --help          # env overrides: snapshot date, git refs, agent tag
+```
+
+Three tags, all the same image id: `skybeta:$(cat VERSION)`, `skybeta:<git-sha>` (suffixed
+`-dirty` if the tree was not committed), and a readable compatibility tag
+`skybeta:0.1.0-px4_1.16.2-isaacros_3.2`.
+
+**`latest` is never pushed and never pulled.** `pull_image.sh` refuses it outright — a
+moving tag is how a ten-drone fleet silently splits mid-competition. Record the digest,
+not the tag.
+
+```bash
+echo "$TOKEN" | docker login <your-registry> -u <user> --password-stdin
+REGISTRY=<your-registry>/<your-org> host/push_image.sh       # --dry-run first
+```
+
+Rebuild cost after an edit: `container_scripts/` → ~1 s (layer 6 only); `src/` → ~11 min
+(colcon re-runs); an apt line or the agent tag → ~20 min; `SNAPSHOT_DATE` → the whole apt
+layer, and regenerate `docker/apt-pins.txt` and diff it before trusting the result.
+
+---
+
+## Topics and frames contract
+
+### Frames
+
+| Frame | Convention | Notes |
+|---|---|---|
+| `odom` | **ENU** — +x East, +y North, +z Up | cuVSLAM's origin is the rig's **startup pose**, not north. "East" and "North" mean whichever way the vehicle's x and y pointed when the SLAM node came up |
+| `base_link` | **FLU** — +x forward, +y left, +z up | origin at the **Pixhawk's primary IMU**, not the CoG or frame centre |
+| `oak_parent_frame` | static child of `base_link` | the camera mount pose, from `host/run.sh stack <x> <y> <z> <r> <p> <y>` |
+| PX4 local | **NED** — +x North, +y East, +z Down | EKF2's own frame; its origin and heading are *not* `odom`'s |
+
+TF tree: `map → odom → base_link → oak_parent_frame → oak_{left,right}_camera_optical_frame`.
+
+**cuVSLAM has no compass and no gravity vector** — `enable_imu_fusion` is off, so this is
+pure stereo VO. A frame with neither cannot be NED, which is why the bridge declares
+`POSE_FRAME_FRD` (value **2**) and lets EKF2 estimate the rotation itself. Keep
+`EKF2_EV_POS_X/Y/Z` at zero on the flight controller: the static TF already carries the
+camera lever arm, and setting both applies it twice.
+
+### Topics
+
+| Direction | Topic | Type / QoS | Source |
+|---|---|---|---|
+| pub | `/oak/{left,right}/image_raw` | `sensor_msgs/Image` `bgr8`, 1024×640 @30 Hz | depthai-ros v3 |
+| pub | `/oak/{left,right}/camera_info` | `sensor_msgs/CameraInfo` | depthai-ros v3 |
+| pub | `/oak/{left,right}/image_mono` | `sensor_msgs/Image` `mono8` | `ImageFormatConverterNode` |
+| pub | `/oak/imu/data` | `sensor_msgs/Imu` @ ~199 Hz | depthai-ros v3 (BNO086) |
+| pub | `/visual_slam/tracking/odometry` | `nav_msgs/Odometry`, RELIABLE @ ~30 Hz | cuVSLAM |
+| pub | `/visual_slam/status` | `VisualSlamStatus` — `vo_state` 0 unknown / 1 tracking / 2 lost | cuVSLAM |
+| pub | `/fmu/in/vehicle_visual_odometry` | `px4_msgs/VehicleOdometry`, **BEST_EFFORT / VOLATILE** | `px4_odom_bridge` |
+| sub | `/skybeta/setpoint/{pose,twist}` | ENU, from **your** node | `skybeta_flight_interface` |
+| pub | `/skybeta/state` | `std_msgs/String`, JSON @ 5 Hz | `skybeta_flight_interface` |
+| pub | `/fmu/in/{trajectory_setpoint,offboard_control_mode}` | @ 10 Hz | `skybeta_flight_interface` |
+| sub | `/fmu/out/*` | BEST_EFFORT / TRANSIENT_LOCAL | uXRCE-DDS agent ← PX4 |
+
+PX4 v1.16 **versions its messages**: a versioned topic gains a `_v<N>` suffix, so
+`/fmu/out/vehicle_status` is spelled `/fmu/out/vehicle_status_v1`. Nothing in the stack
+hard-codes either spelling — `check_topics.sh` and
+`skybeta_flight_interface/topics.py` both resolve it against the live topic list.
+
+### Camera mount pose
+
+`host/run.sh stack <x> <y> <z> <roll> <pitch> <yaw>` becomes the `base_link →
+oak_parent_frame` static TF. Translation in metres, rotation in radians, FLU body axes,
+measured from the **Pixhawk's primary IMU** to the **left** stereo lens focal point
+(cuVSLAM uses the left camera as the optical centre).
+
+```bash
+host/run.sh stack 0.10 0 -0.02 0 0.35 0    # 10 cm forward, 2 cm down, 20 deg down-pitch
+```
+
+Measure the rotation, do not assume zero. A down-pitched VIO camera is the norm on a
+drone, and an unmodelled mount rotation couples vehicle rotation into apparent
+translation — which orbits.
+
+---
+
+## Simulation
+
+The whole stack — cuVSLAM, the odometry bridge, the flight interface, your node —
+against a simulated OAK-D and a simulated Pixhawk, so a team can develop without a drone.
+
+> **This needs an x86_64 workstation with an RTX GPU. It will not run on the Jetson.**
+> NVIDIA's stated floor for Isaac Sim 5.1.0 is an **RTX 4080 16 GB, 32 GB RAM, Ubuntu
+> 22.04, driver ≥ 595**. There is no aarch64 Isaac Sim build — only DGX Spark is supported
+> on aarch64 — so this is a separate machine, not the drone's.
+
+Pinned: **Isaac Sim 5.1.0 + Pegasus v5.1.0 + PX4 SITL v1.16.2**. Pegasus v5.1.0 requires
+Isaac Sim 5.1.0 and is **not** compatible with 6.0.
+
+**Status: a spike, not a supported path.** Every file in `sim/` has been checked against
+the upstream sources it calls and byte-compiles, but nothing has been executed — the
+development machine is a Jetson. [`sim/README.md`](sim/README.md) is an **ordered
+checklist** with the expected output and the meaning of each failure, from PX4 SITL alone
+through to flying the square against Pegasus's ground-truth pose. Run it in order and
+record what actually happened. Gazebo Harmonic is the documented fallback.
+
+---
+
+## Debugging
+
+Full version: **[`docs/debugging.md`](docs/debugging.md)**. The entries that come up most:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| A rate measurement that looks bad | `ros2 topic hz` drops ~10 % in its own Python queue — it reported 27.1 Hz and a 150 ms max gap on a stream that was 30.016 Hz with a 33.37 ms max gap by header stamp | Measure with `record_bag.sh` / `host/run.sh bag` and analyse `header.stamp`. Never quote `ros2 topic hz` |
+| Zero bytes on `/dev/ttyTHS1` | The TELEM2 JST-GH connector, until proven otherwise | Reseat or replace the cable **before** touching any parameter. A negative UART result on a suspect cable is not a result |
+| `/fmu/*` topics listed but no data | `px4_msgs` generation vs firmware, or `ROS_DOMAIN_ID` ≠ `UXRCE_DDS_DOM_ID` | `check_topics.sh` — the pass is an echo returning a sample, not a topic count |
+| `libdiagnostic_updater.so: cannot open shared object file` | The base image's pre-installed 4.0.6 ships only the Python module; apt never upgrades it | Already fixed in the Dockerfile. When another node fails to `dlopen`, check `dpkg -L <pkg> \| grep '\.so'` before assuming the package is absent |
+| `uxrce_dds_client status` shows 0 subscribers | Parameters or baud | `UXRCE_DDS_CFG=102`, `MAV_1_CONFIG=0`, `SER_TEL2_BAUD=921600`, **reboot the FC** |
+| `X_LINK_UNBOOTED` | OAK-D enumerated after container start | Plug the camera in **before** `host/run.sh stack` |
+| `Delta between current and previous frame ... above threshold` | Cosmetic. In the shipped cuVSLAM 3.2 binary this is a bare `RCLCPP_WARN` with no `return` | Nothing. Raising the threshold recovers nothing; the launch sets 40 ms only to silence the driver's stamp wobble |
+| Toilet-bowling in position hold | `pose_frame`, EV yaw, `EKF2_EV_DELAY`, or an unmodelled camera tilt | [`debugging.md`](docs/debugging.md) §4.1 — check `pose_frame` is **2** first |
+| Altitude climbs and keeps climbing | The PX4 height reference, not the vision code | `EKF2_HGT_REF` / `EKF2_BARO_CTRL` / `EKF2_RNG_CTRL`. Load `px4/params/03a_height_reference.params` |
+| `AMENT_TRACE_SETUP_FILES: unbound variable` | `set -u` plus a ROS 2 setup script | Wrap the `source` in `set +u` / `set -u`, as every script in `container_scripts/` does |
+| RViz from the container is blank | Host has not permitted X | `xhost +local:root` |
+
+```bash
+docker logs -f skybeta-stack                              # combined stdout (tmux noise)
+host/run.sh shell                                         # new shell, or exec into the running one
+docker exec -it skybeta-stack tmux attach -t skybeta      # reattach after Ctrl-b d
+```
+
+`host/run.sh stack` names its container `skybeta-stack` and its tmux session `skybeta`;
+`host/run.sh shell` uses `skybeta`, and `host/run.sh bag` uses `skybeta-bag`. Override any
+of them with `NAME=`.
+
+---
+
+## Known limitations
+
+Read [`CLAUDE.md`](CLAUDE.md) before doing anything non-obvious. It is the record of what
+has been measured, what has been fixed, and — importantly — what is *inference* rather
+than fact. The short list:
+
+- **The reference airframe's TELEM2 connector is physically damaged.** Every UART symptom
+  in this repo's history traces to it. Replace the cable before trusting any UART
+  measurement.
+- **The flight symptoms may not have the causes the analysis suggests.** The saved May-07
+  parameter dump has `EKF2_EV_CTRL = 0` — external vision fusion was **off** during the
+  flights that toilet-bowled and climbed. Re-dump the parameters that were actually live
+  before attributing a bad flight to the vision stack.
+- **NITROS does not negotiate.** cuVSLAM 3.2 uses a *Managed*NitrosSubscriber, so type
+  negotiation never completes. The `bgr8 → mono8` conversion genuinely runs on the GPU
+  (p50 5.18 ms, 0 frames lost in 1743), but the hand-off to cuVSLAM is a plain in-container
+  `sensor_msgs/Image`. It is not zero-copy; do not report it as such.
+- **`enable_imu_fusion` is off**, so this is pure stereo VO with no inertial or gravity
+  constraint. Vertical is its weakest axis. IMU rate is no longer the blocker it was —
+  199.1 Hz after fixing the frequency defaults — so VIO is now worth trying.
+- **The `stereo:` config block is inert.** The driver never instantiates a stereo/depth
+  node, so nothing that block sets takes effect — including
+  `i_reverse_stereo_socket_order`. If the stereo baseline sign ever needs flipping, the
+  lever is the **TF**, not the YAML: cuVSLAM reads the baseline from TF, never from
+  `CameraInfo` `P[3]`.
+- **`enable_localization_n_mapping` defaults to False** in the launch — odometry only, no
+  loop closure. Loop closure re-localises by teleporting the pose, which EKF2 has no way
+  to interpret.
+- **The image is aarch64-only.** The sim profile is the x86 counterpart.
+- **The sim profile has never been executed.** See [above](#simulation).
+
+---
+
+## Reference
+
+- [`CLAUDE.md`](CLAUDE.md) — measurements, the bug list, and what remains unverified
+- [`jetson_pixhawk_uxrce_ros2_setup.md`](jetson_pixhawk_uxrce_ros2_setup.md) — the
+  original hardware and PX4 procedure this stack was built from
+- [`host/README.md`](host/README.md) — every host script, phase by phase
+- [`px4/params/README.md`](px4/params/README.md) — the staged parameter files
+- [`px4/firmware/README.md`](px4/firmware/README.md) — the pinned firmware and how to
+  verify it

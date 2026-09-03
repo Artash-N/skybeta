@@ -1,0 +1,35 @@
+# Onboard parameters for Vehicle 1
+#
+# STAGE 3b - EKF2 external-vision fusion. Needs a WORKING vision datastream.
+#
+# Load this only AFTER stage 2 shows /fmu/in/vehicle_visual_odometry receiving data
+# AND the pose_frame bug in px4_odom_bridge.py is fixed (POSE_FRAME_NED ->
+# POSE_FRAME_FRD, or EV yaw aligned). Enabling EV fusion against the current
+# bridge reproduces the toilet bowl.
+# The height-reference half of this file is also in 03a - if you already loaded
+# 03a, those two rows are simply a no-op here.
+# EKF2_EV_CTRL = 9 is bit0 (horizontal position) + bit3 (yaw). Vertical position
+# (bit1 -> 11) and 3D velocity (bit2 -> 13) are deliberately left OFF until
+# vision altitude is trusted.
+# EKF2_HGT_REF 2->0 and EKF2_BARO_CTRL 0->1 restore barometric height aiding.
+# Your current combination (HGT_REF=Range, BARO_CTRL=off) leaves NO height aiding
+# above EKF2_RNG_A_HMAX (5 m) - the prime suspect for the runaway climb.
+# EKF2_EV_DELAY 50 ms is a PLACEHOLDER - measure your real chain latency.
+# EKF2_EV_POS_* stay 0: the camera lever arm is carried by the static TF in
+# oakd_vslam.launch.py. Setting both would apply the offset twice.
+# NOT included on purpose: EKF2_OF_CTRL and EKF2_RNG_CTRL. Retiring optical flow
+# and the rangefinder is a separate, deliberate step - do not do it in the same
+# sitting as enabling vision or you cannot attribute the result.
+#
+# Vehicle-Id	Component-Id	Name	Value	Type
+1	1	EKF2_EV_CTRL	9	6
+1	1	EKF2_EV_DELAY	50.000000	9
+1	1	EKF2_EV_NOISE_MD	0	6
+1	1	EKF2_EVP_NOISE	0.100000	9
+1	1	EKF2_EVV_NOISE	0.100000	9
+1	1	EKF2_EVA_NOISE	0.050000	9
+1	1	EKF2_HGT_REF	0	6
+1	1	EKF2_BARO_CTRL	1	6
+1	1	EKF2_EV_POS_X	0.000000	9
+1	1	EKF2_EV_POS_Y	0.000000	9
+1	1	EKF2_EV_POS_Z	0.000000	9

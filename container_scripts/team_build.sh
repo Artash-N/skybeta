@@ -34,6 +34,9 @@ while read -r name; do
   [[ -n "${name}" ]] || continue
   IFS=: read -ra prefixes <<< "${AMENT_PREFIX_PATH:-}"
   for p in "${prefixes[@]}"; do
+    # A shell that already sourced the team overlay (every interactive one does)
+    # still has the previous team install on the path; that is not shadowing.
+    [[ "${p}" == "${WS}"/* ]] && continue
     if [[ -e "${p}/share/ament_index/resource_index/packages/${name}" ]]; then
       echo "[team_build] WARNING: team package '${name}' shadows the one in ${p}" >&2
       if [[ "${name}" == "px4_msgs" ]]; then

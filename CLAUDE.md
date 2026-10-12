@@ -607,6 +607,13 @@ remainder, and idempotency across two passes — run against this host's real 4-
 **Note:** this host's `/boot/extlinux/extlinux.conf` still physically has the four lines.
 Collapsing them needs root, so `provision.sh` does it; it is harmless (all four paths identical).
 
+**Follow-up 2026-10-12 — that claim was wrong.** `already_applied()` only required *a* matching
+`FDT` line, so on a live-patched unit `apply` (and therefore `provision.sh`) reported "nothing to
+do" and never collapsed the duplicates; a `sudo ... apply` + reboot on the bench left all four.
+`apply` now notices the duplicates and rewrites `extlinux.conf` only (timestamped backup, DTB
+untouched, no reboot needed). Verified unprivileged: plain `apply` now stops at "Run as root"
+instead of "nothing to do", and `--dry-run` removes exactly the three extra lines.
+
 ### 3. FIXED — duplicate YAML keys dropped the resolution; but 1280×800 does **not** fit
 
 `config/oakd_vslam.yaml` declared `left:` and `right:` **twice each**; YAML keeps the last

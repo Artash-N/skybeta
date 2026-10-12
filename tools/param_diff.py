@@ -16,7 +16,7 @@ The actual configuration comes from either a live FC or a saved dump:
 
     tools/param_diff.py --master /dev/ttyTHS1,57600
     tools/param_diff.py --dump px4/params/fleet/SN0001.params
-    tools/param_diff.py --dump ~/Downloads/mav.parm
+    tools/param_diff.py --dump px4/params/fleet/SN0001-reference-2026-05-07.parm
 
 Anything a drone carries that the baseline does not mention -- calibration,
 RC endpoints, flight counters -- is deliberately *not* reported unless you ask
@@ -30,7 +30,7 @@ this drops straight into a pre-flight script.
 Two side modes:
 
     tools/param_diff.py --selftest          no hardware; checks the repo's own files
-    tools/param_diff.py --make-baseline ~/Downloads/mav.parm
+    tools/param_diff.py --make-baseline px4/params/fleet/SN0001-reference-2026-05-07.parm
 
 ``--make-baseline`` is how ``00_baseline.params`` was produced, kept here so the
 derivation is reproducible rather than a one-off. It reads a MAVProxy ``.parm``
@@ -65,6 +65,10 @@ STAGED = [
     PARAM_DIR / "03b_ekf2_vision.params",
 ]
 FIRMWARE_DIR = REPO / "px4" / "firmware"
+# The MAVProxy dump of the reference airframe that 00_baseline.params was
+# generated from (1129 params, captured 2026-05-07). Committed so --selftest
+# runs its dump checks anywhere, not only on the machine that holds the file.
+REFERENCE_DUMP = PARAM_DIR / "fleet" / "SN0001-reference-2026-05-07.parm"
 
 MAV_PARAM_TYPE_INT32 = 6
 MAV_PARAM_TYPE_REAL32 = 9
@@ -532,9 +536,9 @@ def selftest() -> int:
               ", ".join(overlap[:5]) if overlap else f"{len(staged_names)} staged names")
 
     print("\n3. reference dump parses in MAVProxy format")
-    dump = Path("~/Downloads/mav.parm").expanduser()
+    dump = REFERENCE_DUMP
     if not dump.exists():
-        print("  [SKIP] ~/Downloads/mav.parm not present -- steps 3-5 skipped")
+        print(f"  [SKIP] {dump} not present -- steps 3-5 skipped")
         return 1 if failures else 0
     ref = parse_params(dump)
     check(len(ref) > 1000, str(dump), f"{len(ref)} params")

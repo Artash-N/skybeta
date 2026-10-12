@@ -58,6 +58,17 @@ Bench first, props off. Confirm `EKF2_EV_CTRL` is actually fusing before flying 
 `/fmu/out/estimator_status_flags` and check the vehicle's local position tracks the camera when
 you move the airframe by hand.
 
+## Recorded dumps: `fleet/`
+
+One file per airframe, as it is actually running (fleet guide step 8), diffed with
+`tools/param_diff.py --dump fleet/<serial>.params`.
+
+- **`fleet/SN0001-reference-2026-05-07.parm`** — MAVProxy dump of the reference airframe,
+  1129 parameters, captured 2026-05-07, before any staged file was loaded. `00_baseline.params`
+  is generated from it (`tools/param_diff.py --make-baseline`), and `--selftest` uses it to
+  prove the baseline round-trips. It predates `UXRCE_DDS_PTCFG` (absent) and was taken with
+  TELEM2 still on MAVLink. Do not overwrite it; record new dumps alongside it.
+
 ## Deliberately not included
 
 - **`EKF2_OF_CTRL` / `EKF2_RNG_CTRL`.** Retiring optical flow and the rangefinder is a separate

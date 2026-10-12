@@ -94,41 +94,52 @@ Two hardware facts worth knowing before you measure anything:
 
 ## Quick start — competitor
 
-You need a provisioned Jetson (your fleet operator did step 3 of the
-[fleet guide](docs/fleet_guide.md)) and the OAK-D plugged in **before** you start the
-container.
+Your drone comes preloaded: the skybeta image, this repo, and its identity file
+`/etc/skybeta/drone.env` (drone number, DDS domain, camera mount pose), all set up by the
+fleet operator ([fleet guide](docs/fleet_guide.md) step 3). Plug the OAK-D in **before**
+you start the container.
 
 ```bash
-git clone <your fork of skybeta> && cd skybeta
+cd skybeta
 
-# 1. Get the image. REGISTRY is wherever your fleet's images live.
-export REGISTRY=<your-registry>/<your-org>
-host/pull_image.sh $(cat VERSION)
-
-# 2. Check the machine is healthy.
+# 1. Check the machine is healthy.
 host/doctor.sh
 
-# 3. Run the stack. Arguments are the camera mount pose: x y z (m) roll pitch yaw (rad),
-#    FLU, measured from the Pixhawk's primary IMU to the left lens.
-host/run.sh stack 0.10 0 -0.02 0 0.35 0
+# 2. Run the stack. The camera mount pose comes from drone.env; positional arguments
+#    override it: x y z (m) roll pitch yaw (rad), FLU, Pixhawk primary IMU -> left lens.
+host/run.sh stack
 ```
 
+(Setting up a drone from scratch instead? `host/pull_image.sh $(cat VERSION)` with
+`REGISTRY` set fetches the image; the fleet guide covers the rest.)
+
 That opens a tmux session with four windows — `agent`, `slam`, `bridge`, `competitor`.
-`Ctrl-b 0..3` switches, `Ctrl-b d` detaches.
+`Ctrl-b 0..3` switches, `Ctrl-b d` detaches. The banner shows your drone number, DDS domain
+and the team workspace being used.
 
 ### Where to write your code
 
+**In `~/team_ws/src` on the drone, nowhere else.** That directory is mounted into every
+container at `/root/team_ws`, so it survives the container exiting and image updates; code
+written anywhere inside a container is gone when it stops. Start from the example:
+
 ```
-src/competitor_example/competitor_example/square_mission.py    <- copy this
+src/competitor_example/competitor_example/square_mission.py    <- copy this package
 ```
 
 It is a heavily commented Python node that waits for Offboard, captures a start pose,
 publishes ENU setpoints on a timer, checks arrival, and notices when the pilot takes over.
-Fork it into your own package and point the launcher at it:
+Copy it into `~/team_ws/src/my_team_nav`, rename the package, and point the launcher at it:
+in `/etc/skybeta/drone.env` (`COMPETITOR_PKG=`, `COMPETITOR_LAUNCH=`), or for one run:
 
 ```bash
 COMPETITOR_PKG=my_team_nav COMPETITOR_LAUNCH=my_mission.launch.py host/run.sh stack
 ```
+
+The `competitor` window builds the team workspace (`team_build.sh`) before launching. Extra
+apt/pip packages go in `~/team_ws/Dockerfile` (`host/run.sh build --init`, then
+`host/run.sh build`); never `apt install` in a running container. Don't put `px4_msgs` in
+your workspace: the image already carries the generation that matches the flight controller.
 
 Three topics are the entire interface:
 
@@ -160,8 +171,10 @@ whose output must match before you move on.
 2  Load 00_baseline.params, then
    calibrate THIS airframe in QGC       px4/params/           (never clone calibration)
 3  host/provision.sh                    Jetson                (one reboot, then resume)
+   + /etc/skybeta/drone.env             unique DRONE_ID / ROS_DOMAIN_ID   doctor: drone-identity
 4  Load 01_telem2_mavlink.params        prove the wire        mavproxy HEARTBEAT
 5  Load 02_telem2_uxrce_dds.params      prove the data        check_topics.sh echoes
+   + UXRCE_DDS_DOM_ID = drone number    (02 sets UXRCE_DDS_PTCFG=2)
 6  Load 03a_height_reference.params     bench hover           altitude holds
 7  Measure EKF2_EV_DELAY, then 03b      EV fusion             cs_ev_pos / cs_ev_yaw true
 8  Save px4/params/fleet/<serial>.params + tools/param_diff.py -> zero drift
@@ -177,7 +190,13 @@ The two things most often got wrong:
   and you get a vehicle that believes it is level when it is not — a silent failure with no
   error message anywhere. `00_baseline.params` excludes them by construction; its header
   lists exactly what was stripped and why.
-- **Step 5.** A topic list is not a pass. `ros2 topic list` showing fifty `/fmu/*` topics
+- **Step 5, the DDS settings.** Every drone shares one WiFi network, so each gets its own
+  DDS domain (`ROS_DOMAIN_ID` in `drone.env` = `UXRCE_DDS_DOM_ID` on its FC), and by default
+  its DDS never leaves the Jetson. That needs **`UXRCE_DDS_PTCFG = 2`** on the FC (in the 02
+  file): with the default 0 the agent's PX4 participant sits on every interface, the
+  loopback-only stack never discovers it, and `/fmu/*` silently never arrives. Measured, not
+  theorised: see [`host/README.md`](host/README.md#per-drone-identity-and-dds-isolation).
+- **Step 5, the pass condition.** A topic list is not a pass. `ros2 topic list` showing fifty `/fmu/*` topics
   only proves the agent built a session and created the datawriters. **The pass condition
   is a `--once` echo returning a sample**, which is what `check_topics.sh` does.
 
@@ -201,10 +220,13 @@ skybeta/
 ├── container_scripts/               baked onto $PATH inside the image
 │   ├── check_topics.sh              the real bug-#8 test: echo, not topic count
 │   ├── record_bag.sh                mcap recording of the flight-debug topic set
-│   ├── run_agent.sh                 MicroXRCEAgent, serial or udp4
+│   ├── run_agent.sh                 MicroXRCEAgent, serial or udp4, -r participant refs
 │   ├── run_bridge.sh                px4_odom_bridge
+│   ├── run_competitor.sh            the competitor window: team_build, then launch
 │   ├── run_full_stack.sh            tmux: agent, slam, bridge, competitor
-│   └── run_slam.sh                  camera + converters + cuVSLAM
+│   ├── run_slam.sh                  camera + converters + cuVSLAM
+│   ├── skybeta_env.sh               sourced: ROS + underlay + team overlay
+│   └── team_build.sh                build ~/team_ws as an overlay, chown it back
 ├── docker/
 │   ├── Dockerfile.jetson            aarch64: NGC base + apt + agent + workspace
 │   ├── Dockerfile.sim               x86_64 twin for the Isaac Sim profile
@@ -218,14 +240,18 @@ skybeta/
 ├── host/                            things a container cannot do for itself
 │   ├── README.md
 │   ├── provision.sh                 one idempotent, resumable entry point
-│   ├── doctor.sh                    ten unprivileged health checks; non-zero on any FAIL
-│   ├── run.sh                       stack | shell | bag | sim
+│   ├── doctor.sh                    twelve unprivileged health checks; non-zero on any FAIL
+│   ├── run.sh                       stack | shell | bag | build | sim
+│   ├── drone.env.example            template for /etc/skybeta/drone.env (per-drone identity)
+│   ├── drone_env.sh                 library: parses drone.env (never sources it)
+│   ├── dds/                         fastdds_localhost.xml (ROS nodes),
+│   │                                agent_refs_{local,network}.xml (the agent, PTCFG=2)
 │   ├── build_image.sh
 │   ├── pull_image.sh                base-first, so each drone transfers the delta
 │   ├── push_image.sh
 │   ├── jetson_uart_dma_fix.sh       the R36.5 UARTA DMA/IOMMU device-tree patch
 │   ├── uart_loopback_test.py        jumper pins 8+10 and prove the Jetson side
-│   └── tests/test_extlinux_fix.sh
+│   └── tests/                       test_extlinux_fix.sh, test_drone_env.sh
 ├── px4/
 │   ├── firmware/                    px4_fmu-v6c_default-v1.16.2.px4 + .sha256 + README
 │   └── params/
@@ -235,7 +261,8 @@ skybeta/
 │       ├── 02_telem2_uxrce_dds.params    TELEM2 -> uXRCE-DDS
 │       ├── 03a_height_reference.params   baro height aiding (the runaway-climb fix)
 │       ├── 03b_ekf2_vision.params        EV fusion
-│       └── fleet/                   per-drone saved baselines: <serial>.params
+│       └── fleet/                   per-drone saved dumps: <serial>.params, plus the
+│                                    SN0001 reference dump the baseline was generated from
 ├── sim/                             Isaac Sim 5.1.0 + Pegasus v5.1.0 + PX4 SITL, x86 only
 │   ├── README.md                    ordered spike checklist
 │   ├── pegasus_skybeta.py           the Isaac Sim app (host)
@@ -297,6 +324,7 @@ across the venue network, once per drone.
 | Micro-XRCE-DDS-Agent | **v2.4.3** | the tag PX4's own v1.16 ROS 2 user guide specifies. Do not bump it to v3.x |
 | ROS apt snapshot | `2026-08-07` | `packages.ros.org/ros2` is a rolling repo; two builds of a "pinned" Dockerfile weeks apart genuinely resolve different candidates |
 | Isaac ROS apt | NVIDIA `release-3` | already a pinned channel, in `/etc/apt/sources.list` in the base — the snapshot swap leaves it alone |
+| pip | `depthai==3.10.0`, `MAVProxy==1.8.74`, `pymavlink==2.4.49`, `numpy<2` | exactly what 0.1.0 resolved. Unpinned, a 2026-10 rebuild pulled numpy 2.2.6 over the base's 1.26.4 (ROS Humble's compiled modules are built against 1.x), opencv-python 5.0 and vtk |
 
 `ros-humble-diagnostic-updater` is named explicitly in the apt list on purpose. The NGC
 base ships 4.0.6, which contains **only the Python module** — no `libdiagnostic_updater.so`
@@ -422,7 +450,8 @@ Full version: **[`docs/debugging.md`](docs/debugging.md)**. The entries that com
 |---|---|---|
 | A rate measurement that looks bad | `ros2 topic hz` drops ~10 % in its own Python queue — it reported 27.1 Hz and a 150 ms max gap on a stream that was 30.016 Hz with a 33.37 ms max gap by header stamp | Measure with `record_bag.sh` / `host/run.sh bag` and analyse `header.stamp`. Never quote `ros2 topic hz` |
 | Zero bytes on `/dev/ttyTHS1` | The TELEM2 JST-GH connector, until proven otherwise | Reseat or replace the cable **before** touching any parameter. A negative UART result on a suspect cable is not a result |
-| `/fmu/*` topics listed but no data | `px4_msgs` generation vs firmware, or `ROS_DOMAIN_ID` ≠ `UXRCE_DDS_DOM_ID` | `check_topics.sh` — the pass is an echo returning a sample, not a topic count |
+| `/fmu/*` topics listed but no data | `UXRCE_DDS_PTCFG` ≠ 2 on the FC (local DDS scope), `ROS_DOMAIN_ID` ≠ `UXRCE_DDS_DOM_ID`, or `px4_msgs` generation vs firmware | `check_topics.sh` — the pass is an echo returning a sample, not a topic count. The topics you see may be only the stack's own endpoints |
+| A laptop can't see the drone's topics | By design: `SKYBETA_DDS_SCOPE=local` keeps DDS on the Jetson | `SKYBETA_DDS_SCOPE=network` in `drone.env` + the same `ROS_DOMAIN_ID` on the laptop; switch back before flying |
 | `libdiagnostic_updater.so: cannot open shared object file` | The base image's pre-installed 4.0.6 ships only the Python module; apt never upgrades it | Already fixed in the Dockerfile. When another node fails to `dlopen`, check `dpkg -L <pkg> \| grep '\.so'` before assuming the package is absent |
 | `uxrce_dds_client status` shows 0 subscribers | Parameters or baud | `UXRCE_DDS_CFG=102`, `MAV_1_CONFIG=0`, `SER_TEL2_BAUD=921600`, **reboot the FC** |
 | `X_LINK_UNBOOTED` | OAK-D enumerated after container start | Plug the camera in **before** `host/run.sh stack` |
@@ -445,6 +474,9 @@ of them with `NAME=`.
 ---
 
 ## Known limitations
+
+What changed between image versions, and what to do when upgrading a drone:
+[`CHANGELOG.md`](CHANGELOG.md).
 
 Read [`CLAUDE.md`](CLAUDE.md) before doing anything non-obvious. It is the record of what
 has been measured, what has been fixed, and — importantly — what is *inference* rather

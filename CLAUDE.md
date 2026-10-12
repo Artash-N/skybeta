@@ -10,16 +10,24 @@ canonical hardware/PX4 procedure; [`README.md`](README.md) for the container wor
 
 - **`host/`** does what a container can't: `provision.sh` (idempotent, resumable: prereqs →
   UART DMA patch → power mode → image pull), `doctor.sh` (unprivileged health check),
-  `run.sh stack|shell|bag|sim`, `build_image.sh` / `pull_image.sh` / `push_image.sh`,
+  `run.sh stack|shell|bag|build|sim`, `build_image.sh` / `pull_image.sh` / `push_image.sh`,
   `jetson_uart_dma_fix.sh`, `uart_loopback_test.py`. The old numbered scripts are gone.
+  Per-drone identity: `/etc/skybeta/drone.env` (template `drone.env.example`, parsed by
+  `drone_env.sh`). DDS isolation: `dds/fastdds_localhost.xml` (ROS nodes) and
+  `dds/agent_refs_{local,network}.xml` (the agent's PX4 participant, `UXRCE_DDS_PTCFG=2`).
 - **`docker/Dockerfile.jetson`** builds `skybeta:<VERSION>` on the NGC Isaac ROS Humble base
   (content-hash pinned, aarch64). `docker/Dockerfile.sim` is the x86 sim twin.
 - **`container_scripts/*.sh`** land on `$PATH` inside the image (`run_agent.sh`, `run_slam.sh`,
-  `run_bridge.sh`, `run_full_stack.sh`, `check_topics.sh`, `record_bag.sh`).
+  `run_bridge.sh`, `run_full_stack.sh`, `run_competitor.sh`, `check_topics.sh`, `record_bag.sh`,
+  `team_build.sh`, and `skybeta_env.sh`, which is sourced, not run).
+- **Team code lives outside the image**, in `$TEAM_WS` (default `~/team_ws`) on the host,
+  bind-mounted at `/root/team_ws` and built as an overlay on `/root/skybeta_ws`. The VIO -> FC
+  pipeline (agent, cuVSLAM, bridge) never sources that overlay.
 - **`src/`** — `oakd_vslam_bringup` (cuVSLAM launch + the PX4 odometry bridge),
   `skybeta_flight_interface` (the competitor-facing offboard wrapper: 10 Hz heartbeat, ENU↔NED,
   geofence, **no arm path**), `competitor_example` (Python reference mission),
-  `competitor_advanced_cpp` (px4_ros2_cpp custom mode). Competitors add packages here.
+  `competitor_advanced_cpp` (px4_ros2_cpp custom mode). Competitors add their own packages
+  in the team workspace, not here.
 - **`px4/`** — pinned v1.16.2 firmware + staged parameter files; **`tools/`** — `param_diff.py`,
   `latency_probe.py`; **`sim/`** — Isaac Sim + Pegasus profile; **`docs/`** — competitor, fleet,
   hardware and debugging guides.
@@ -73,6 +81,13 @@ Measured 2026-09-02 on the dev unit, not assumed:
   `/fmu/in/vehicle_visual_odometry`) → silent again → 0 bytes across a continuous 60 s watch.
   That one good run is proof the wiring, 921600 baud, `UXRCE_DDS_CFG=102` and the agent are
   all correct. Everything else was the connector losing contact.
+
+  **Same pattern again 2026-10-12** (cable still not replaced): 0 bytes at every baud rate ->
+  after a reseat, uXRCE framing (`7e 01 00 ...`) at 921600 and a full session with the 0.2.0
+  stack (24 datawriters, 27 datareaders, a replier) -> 0 bytes again after the stack was
+  restarted, PX4 never reconnected. That session also showed the FC is on
+  `UXRCE_DDS_DOM_ID=0`, `UXRCE_DDS_PTCFG=0` (agent participant multicasting on WiFi to
+  `239.255.0.1:7400`).
 
   **Consequences for debugging:** any *negative* UART result recorded while this connector is
   in place is uninformative — it tells you nothing about configuration. Positive results are
@@ -468,10 +483,58 @@ header stamps. This is the state a competitor forks.
 Not covered on the bench: `vo_state` under motion (camera was static), and everything
 downstream of the UART — the TELEM2 connector is still broken.
 
+## Fleet bench verification (2026-10-12, image `skybeta:0.2.0`, branch `fleet-ready`)
+
+Context: every team gets one drone, all drones share one WiFi network, and teams write code on
+the drone itself. Measured on the dev Orin (`wlP1p1s0`), not assumed.
+
+**DDS isolation**
+
+| Check | Result |
+|---|---|
+| RMW in the image | `rmw_fastrtps_cpp`, Fast DDS 2.6 |
+| MicroXRCEAgent's Fast DDS | its own **2.14.7** (`/usr/local/lib/libfastrtps.so.2.14.7`), separate from ROS's |
+| `fastdds_localhost.xml`, ros:humble container, 7 publishers + 2 echoes | all discovered; **0** UDP packets on eth0 (294 without the profile) |
+| same, but default `maxInitialPeersRange` (4) | only 4 of 7 topics discovered — loopback has no multicast, so the range is load-bearing |
+| full stack, local scope, domain 1 | 29 topics, cuVSLAM odometry 29.99–30.02 Hz, **0** DDS packets on WiFi in 30 s |
+| full stack, network scope (control) | 71 packets in 30 s, all to `239.255.0.1:7650` = 7400 + 250 x domain 1 |
+
+**The agent does not take the default profile.** An XRCE client compiled from the agent's own
+examples, sending PX4 v1.16.2's exact participant XML (quoted from
+`uxrce_dds_client.cpp`) to the real agent in the image, with the ROS side on
+`fastdds_localhost.xml`; discovery judged by a long-lived rclpy node (see gotchas):
+
+| FC `UXRCE_DDS_PTCFG` | ROS node discovers the agent's topic | DDS packets on WiFi |
+|---|---|---|
+| no profile anywhere (old behaviour) | yes | 31 |
+| 0, ROS on the localhost profile | **never** (15 s) | 15 |
+| 1 (PX4's localhost-only XML) | yes, 1.4 s | 0 |
+| 2 + `agent_refs_local.xml` | yes, 0.2 s (1.6 s inside the real `run.sh` stack) | 0 |
+| 2 + `agent_refs_network.xml`, ROS default transports | yes, 0.2 s | 20 (expected) |
+| 2, agent started without its refs file | fails loudly: `reference file ... does not exist` | — |
+
+The real PX4 then confirmed the `PTCFG=0` row: session up, its participant on WiFi, no `/fmu`
+data in domain 1 — see Hardware status.
+
+**Team workspace**: a package written on the host into `~/team_ws/src` built in the
+competitor window (7 s), launched, and published (received by an rclpy subscriber); `build/`,
+`install/` and `src/` owned by the host user; everything survived the container exiting. A
+team `px4_msgs` is flagged by `team_build.sh`; the VIO pipeline stays on the underlay.
+
+**Also run, all passing**: 121/121 unit tests in the image (`skybeta_flight_interface`,
+`oakd_vslam_bringup`), `param_diff --selftest` all six steps against the committed reference
+dump, `test_drone_env.sh` 30/30, `test_extlinux_fix.sh` 8/8 on the live `extlinux.conf`.
+
+**Not yet verified**: `/fmu` data arriving through the 0.2.0 stack with `UXRCE_DDS_PTCFG=2` on
+a real FC (the TELEM2 link dropped first); two drones on one access point.
+
 ## Known bugs
 
 **Status: #0–#9 are all FIXED as of 2026-09-03** (branch `competition-base`, verified — see the
-end-to-end bench section above). They are kept here because the *diagnosis* is the valuable part:
+end-to-end bench section above). **#10–#14 are FIXED on branch `fleet-ready` as of
+2026-10-12** (image `skybeta:0.2.0`, see the fleet bench section above); #13 additionally
+needs `UXRCE_DDS_PTCFG=2` on every FC, which has not yet been carried through a real
+`/fmu` data run. They are kept here because the *diagnosis* is the valuable part:
 each one records how the symptom presented and what the evidence was, so a regression is
 recognisable. Anything still open is called out explicitly in its own entry.
 
@@ -732,6 +795,47 @@ hid a real hazard: setting `EKF2_EV_POS_*` on the FC *and* leaving the static TF
 `host/run.sh stack <x> <y> <z> [roll pitch yaw]`; `px4/params/03b_ekf2_vision.params` pins
 `EKF2_EV_POS_X/Y/Z` to `0` and says why.
 
+### 10. FIXED — every drone's DDS met every other drone's on a shared network
+
+`host/run.sh` runs every container `--network host` and set no domain or transport, so all
+drones' ROS nodes and agents shared domain 0 on the WiFi: drone A's `/fmu/in/*` setpoints
+were visible to drone B's agent, and the 30 Hz stereo topics went out as multicast. Fixed by a
+per-drone `ROS_DOMAIN_ID` (`/etc/skybeta/drone.env`, matched by `UXRCE_DDS_DOM_ID` on the FC,
+now a per-unit exclusion in `param_diff`) and `SKYBETA_DDS_SCOPE=local` by default. See #13
+for the part of this that did not work first time.
+
+### 11. FIXED — team code vanished when the container exited
+
+Every container is `--rm`, and the competitor guide said to `colcon build` inside it. Code,
+build output and any `apt`/`pip` installs were lost on exit. Team code now lives in
+`$TEAM_WS` on the host (mounted at `/root/team_ws`, built by `team_build.sh`, chowned back to
+the host user); extra packages go in `$TEAM_WS/Dockerfile` (`host/run.sh build`).
+
+### 12. FIXED — the image's pip packages were unpinned
+
+`pip3 install depthai MAVProxy`. A rebuild for 0.2.0 resolved numpy 2.2.6 over the base's
+1.26.4, opencv-python 5.0 and vtk (via MAVProxy 1.8.75), and depthai 3.11 — none of it ever run
+on the vehicle. Pinned to what 0.1.0 shipped (`pip3 list` in that image): depthai 3.10.0,
+MAVProxy 1.8.74, pymavlink 2.4.49, `numpy<2`.
+
+### 13. FIXED (needs `UXRCE_DDS_PTCFG=2` on each FC) — the agent ignored the localhost profile
+
+The first fix for #10 mounted `fastdds_localhost.xml` as the *default* profile, on the
+assumption that it reaches MicroXRCEAgent too. It does not: with `UXRCE_DDS_PTCFG=0` PX4 sends
+its own participant XML and the agent builds exactly that, on every interface. Worse, the ROS
+nodes, now loopback-only, never discover it — so in local scope `/fmu/*` would silently never
+reach the bridge. It only looked healthy on the bench because TELEM2 was dead. Measured
+(table above), then seen on the real PX4. Fixed by `UXRCE_DDS_PTCFG=2` (in
+`02_telem2_uxrce_dds.params`): PX4 asks for the participant by the reference
+`px4_participant`, which the agent builds from `host/dds/agent_refs_<scope>.xml` passed as
+`-r`. PTCFG=2 over 1 so that the scope switch in `drone.env` moves the agent too.
+
+### 14. FIXED — `COMPETITOR_PKG` / `COMPETITOR_LAUNCH` never reached the container
+
+The competitor guide documented `COMPETITOR_PKG=my_team_nav host/run.sh stack`, but `run.sh`
+never passed either variable into `docker run`, so the stack always launched
+`competitor_example`. Now forwarded (and settable in `drone.env`).
+
 ## Gotchas when working here
 
 - The image is **aarch64-only** — the NGC Isaac ROS base publishes no amd64 manifest.
@@ -749,6 +853,18 @@ hid a real hazard: setting `EKF2_EV_POS_*` on the FC *and* leaving the static TF
 - `px4_msgs` (`release/1.16`) and `px4-ros2-interface-lib` (`release/1.16`) are cloned at build
   time; their resolved SHAs are baked into the image at `/root/skybeta_ws/*.sha` so a drifted
   rebuild is detectable.
+- **Test DDS discovery with a long-lived node, not `ros2 topic list --no-daemon`.** With
+  loopback-only transports, discovery is unicast and slower than the CLI's brief wait; the CLI
+  reported "not found" for an agent participant that a 15 s rclpy node found in 0.2 s.
+- **Never put `--` inside an XML comment in `host/dds/`.** It makes the file malformed, and Fast
+  DDS then silently ignores the profile and falls back to every interface. Done twice in one
+  session; `run.sh` and `test_drone_env.sh` now refuse a profile that does not parse.
+- **Prove isolation with a packet capture**, e.g. `tcpdump -ni wlP1p1s0 'udp portrange
+  7400-7700'` from `docker run --rm --network host alpine` (no sudo needed), and always run the
+  `network`-scope control so you know the capture can see a leak.
+- `host/run.sh stack` needs a TTY (`docker run -it`). Headless, e.g. over SSH from a script:
+  `sleep infinity | script -qfc "host/run.sh stack" stack.log`. And never `pkill -f` a pattern
+  that also appears in your own SSH command line — it kills the session.
 - Editing `container_scripts/` rebuilds only the last layers (~1 s); editing anything under
   `src/` re-runs colcon for all four packages (~10 min on Orin Nano). `.dockerignore` keeps
   local `build/`/`install/`/`log/` and recorded bags out of the context so they don't bust that

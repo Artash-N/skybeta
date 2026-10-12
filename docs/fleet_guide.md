@@ -380,6 +380,29 @@ check_topics.sh
 > spelled `/fmu/out/vehicle_status_v1`. Nothing in the stack hard-codes either spelling;
 > `check_topics.sh` and `skybeta_flight_interface/topics.py` both resolve it at runtime.
 
+### Verify — and prove nothing reaches the WiFi
+
+Data echoing is half the pass. The other half, for a drone that will share a network, is that
+none of its DDS traffic goes over the air. From the Jetson, with the stack running (no sudo
+needed — the capture runs in a throwaway container):
+
+```bash
+docker run --rm --network host alpine sh -c "apk add -q tcpdump && \
+  timeout 30 tcpdump -ni <wifi-iface> 'udp portrange 7400-7700' | wc -l"
+```
+
+```
+0
+```
+
+Zero packets in 30 s is the pass (bench: 0 with the full stack up). Then run the control once:
+set `SKYBETA_DDS_SCOPE=network`, restart the stack, repeat — you must now see packets (bench:
+71), or the capture is not looking at the right interface. Set the scope back to `local`.
+
+If the echo passes but packets appear in local scope, the agent's participant is on the
+network: `UXRCE_DDS_PTCFG` is not 2. If the echo *fails* in local scope but passes with
+`SKYBETA_DDS_SCOPE=network`, it is the same cause seen from the other side.
+
 If the list is healthy but the echo hangs: check `ROS_DOMAIN_ID` against
 `UXRCE_DDS_DOM_ID`, then `uxrce_dds_client status` on the FC, then that the installed
 `VehicleOdometry.msg` carries `MESSAGE_VERSION` (the quick proof you are on the 1.16

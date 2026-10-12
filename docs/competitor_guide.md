@@ -6,6 +6,10 @@ The stack below you — OAK-D-S2 → cuVSLAM → PX4 EKF2 over uXRCE-DDS — pub
 GPS-denied pose at ~30 Hz. Everything between your setpoints and the flight controller is
 owned by `skybeta_flight_interface`, which you should not need to modify.
 
+If you would rather write the localisation than consume it, you can **replace cuVSLAM with
+your own SLAM or VIO** — the camera, the bridge and the flight interface all stay. That is
+§7.
+
 There is **always a safety pilot on RC**. They arm the vehicle, they select Offboard, and
 they can take it back at any instant. Nothing you write may assume otherwise.
 
@@ -209,6 +213,9 @@ That window runs `ros2 launch competitor_example competitor.launch.py`, which st
 COMPETITOR_PKG=my_team_nav COMPETITOR_LAUNCH=my_mission.launch.py host/run.sh stack
 ```
 
+Replacing cuVSLAM with your own SLAM instead of building on top of it? That is §7, and
+`run_full_stack.sh --no-slam` is the launcher for it.
+
 Or work by hand in a shell on the running container:
 
 ```bash
@@ -235,21 +242,25 @@ Do this for every flight. It is the only way to explain a bad one afterwards.
 
 ```bash
 host/run.sh bag                        # writes mcap into ./bags on the host
+host/run.sh bag --duration 60          # or a fixed-length one
 ```
 
-Or by hand from a container shell:
+The default set is deliberately **light**: odometry, tracking status, camera calibration,
+the IMU, every `/fmu/*` and `/skybeta/*` topic on the graph — and **no camera images**.
+Images are behind a flag because they are not free:
 
 ```bash
-ros2 bag record -s mcap -o /bags/$(date +%Y%m%d-%H%M%S) \
-  /oak/left/image_raw /oak/right/image_raw /oak/imu/data \
-  /visual_slam/tracking/odometry /visual_slam/status \
-  /skybeta/setpoint/pose /skybeta/setpoint/twist /skybeta/state \
-  /fmu/in/vehicle_visual_odometry /fmu/in/trajectory_setpoint \
-  /fmu/in/offboard_control_mode /fmu/out/vehicle_local_position
+host/run.sh bag --images=mono          # the mono8 pair, ~1/3 the bytes
+host/run.sh bag --images=raw           # the bgr8 pair -- ~36 MB/s
+host/run.sh bag --all                  # everything, images included
 ```
 
-Record from a *second* container (`host/run.sh bag` does), not from the stack container —
-recording competes for CPU with cuVSLAM, and the camera topics are the expensive ones.
+Recording `/oak/left/image_raw` alone wrote **1.1 GB in 30 s** on this rig and dragged the
+camera to 19.6 Hz and cuVSLAM odometry to **11.3 Hz** while it ran. Any rate you measure
+from such a bag is a rate under recording load, not the rate your stack normally achieves.
+`record_bag.sh` prints a warning whenever images are included; believe it.
+
+Record from a *second* container (`host/run.sh bag` does), not from the stack container.
 
 ---
 
@@ -281,7 +292,270 @@ installed `px4_msgs` at startup and logs the map it chose; do not hard-code eith
 
 ---
 
-## 7. The advanced track — `competitor_advanced_cpp`
+## 7. Bring your own SLAM
+
+Nothing in this stack forces you to use cuVSLAM. The competition explicitly allows you to
+replace it with your own SLAM or VIO, and the swap point is the **PX4 odometry bridge**,
+which is parameterised rather than hard-wired:
+
+```bash
+ros2 launch oakd_vslam_bringup px4_bridge.launch.py --show-args
+```
+
+| Launch argument | Default | What it is for |
+|---|---|---|
+| `input_topic` | `/visual_slam/tracking/odometry` | **the swap point** — point it at your tracker |
+| `output_topic` | `/fmu/in/vehicle_visual_odometry` | leave it alone |
+| `status_topic` | `/visual_slam/status` | tracking loss → `reset_counter`; see §7.4 |
+| `pose_frame` | `FRD` | see §7.5. Leave it alone |
+| `publish_velocity` | `true` | `false` if your twist is not trustworthy |
+| `min_position_variance` | `0.0` | m², a floor on the published position variance |
+
+Publish a `nav_msgs/Odometry` that satisfies §7.3, point `input_topic` at it, and
+everything downstream — the ENU↔NED conversion, `reset_counter`, the PX4 QoS, the
+`skybeta_flight_interface` envelope, `/skybeta/state` — keeps working unchanged.
+
+### 7.1 What you get as input
+
+Measured on the bench with the full stack running, 44 s, from header stamps — not
+estimates:
+
+| Topic | Type | Rate | Notes |
+|---|---|---|---|
+| `/oak/left/image_raw`, `/oak/right/image_raw` | `sensor_msgs/Image` | **30.000 Hz** | **1024×640 `bgr8`**, p99 gap 33.33 ms |
+| `/oak/left/image_mono`, `/oak/right/image_mono` | `sensor_msgs/Image` | 30.000 Hz | **`mono8`**, converted on the GPU by `isaac_ros_image_proc` |
+| `/oak/left/camera_info`, `/oak/right/camera_info` | `sensor_msgs/CameraInfo` | 30 Hz | intrinsics + distortion; **not** the baseline — see §7.2 |
+| `/oak/imu/data` | `sensor_msgs/Imu` | **197.9 Hz** | BNO086, interval p50 5.02 ms, no fused quaternion |
+
+**The images are `bgr8` even though the sensors are monochrome.** `CAM_B`/`CAM_C` are
+OV9282 mono parts, but the depthai v3 driver publishes those sockets as colour and exposes
+no encoding parameter, so the three channels are identical and a host-side conversion is
+unavoidable. Either subscribe to `image_mono` or take any one channel yourself — the
+converted `mono8` is bit-exact with each `bgr8` channel.
+
+**`image_mono` only exists while cuVSLAM does.** The two converters are composable nodes
+inside cuVSLAM's container, so in `--no-slam` mode (§7.4) they are not running. If you
+want mono8 there, convert from `image_raw` in your own node.
+
+**Do not raise the resolution.** 1024×640 is not a conservative default, it is the measured
+limit. The MyriadX's XLink transport saturates near **143 MB/s** regardless of the USB link
+rate, and the OAK-D-S2 *is* on USB 3.0 SuperSpeed:
+
+| Config | Rate | |
+|---|---|---|
+| 1280×800 ×2 @30 | **23.3 Hz** | at the ceiling; 23 % of frames lost |
+| 1280×800 left only @30 | 30.0 Hz | proves it is throughput, not the sensor |
+| **1024×640 ×2 @30** | **30.0 Hz** | 118 MB/s — **what ships** |
+| 960×600 ×2 @30 | 30.0 Hz | 104 MB/s, more margin |
+
+At 1280×800 the two eyes drop *different* frames: L/R header-stamp sync p95 rises to
+33.3 ms — one whole frame — few stereo pairs match at all, and cuVSLAM's own odometry
+collapsed to 16.4 Hz. If you need headroom, go **down** to 960×600 in
+[`../src/oakd_vslam_bringup/config/oakd_vslam.yaml`](../src/oakd_vslam_bringup/config/oakd_vslam.yaml),
+never up. Re-measure if you touch it.
+
+### 7.2 Extrinsics — read the baseline from TF, not from `CameraInfo`
+
+**This is the one that silently ruins a stereo front end.** cuVSLAM takes the stereo
+baseline from the **TF tree**, not from `CameraInfo`'s `P[3]`, and so should you. The
+static transforms published by the launch file *are* the rig geometry as far as the
+tracker is concerned. `i_reverse_stereo_socket_order` in the YAML is **not** the lever for
+a baseline sign error — the whole `stereo:` block it lived in was inert and has been
+deleted. The TF is the lever.
+
+```bash
+# the stereo baseline, as the tracker sees it
+ros2 run tf2_ros tf2_echo oak_left_camera_optical_frame oak_right_camera_optical_frame
+
+# where the camera sits on the airframe (FLU body frame)
+ros2 run tf2_ros tf2_echo base_link oak_left_camera_optical_frame
+ros2 run tf2_ros tf2_echo base_link oak_parent_frame
+```
+
+The chain is `base_link → oak_parent_frame → oak_*_camera_optical_frame`. The first link is
+a static transform driven by `host/run.sh stack <x> <y> <z> [roll pitch yaw]`; the rest
+comes from depthai's URDF and the on-device calibration. **Measure your actual mount and
+pass it.** The default is zero, and an unmodelled mount rotation couples vehicle rotation
+into apparent translation — which orbits. Set `EKF2_EV_POS_X/Y/Z` on the flight controller
+to `0` and leave them there: this TF already carries the lever arm, and setting both
+applies it twice.
+
+### 7.3 The output contract
+
+Publish `nav_msgs/Odometry` on a topic of your choosing. The bridge is the only consumer,
+and it expects exactly this:
+
+| Field | What goes in it |
+|---|---|
+| `header.stamp` | when the **image** was captured, not when you finished computing. It lands in the `EKF2_EV_DELAY` budget |
+| `header.frame_id` | your odometry frame (cuVSLAM uses `odom`) |
+| `child_frame_id` | the body frame — `base_link` |
+| `pose.pose.position` | **ENU**, metres: `+x East, +y North, +z Up` |
+| `pose.pose.orientation` | **ENU**, normalised quaternion, body→odom |
+| `twist.twist.linear` | **body frame, FLU**, m/s — *not* the odom frame |
+| `twist.twist.angular` | **body frame, FLU**, rad/s |
+| `pose.covariance` | row-major 6×6, order `[x y z roll pitch yaw]` — see §7.6 |
+| `twist.covariance` | row-major 6×6, order `[vx vy vz wx wy wz]` |
+
+Aim for **30 Hz**. The rest of the stack is built around it.
+
+**The twist really is body-frame, and that is not a convention we invented.** cuVSLAM's
+`pose_cache.cpp` computes `dp = poses.front().inverse() * poses.back()`, i.e.
+`T_body(t0)_body(t1)`, whose translation is in the body frame. The bridge relies on that to
+emit `VELOCITY_FRAME_BODY_FRD`. If your tracker reports velocity in the world frame,
+rotate it into the body frame before publishing, or set `publish_velocity:=false` and let
+EKF2 do without it.
+
+**Do not pre-convert to NED or FRD.** The bridge does all of it:
+
+```
+position:     (x_ned, y_ned, z_ned) = (y_enu, x_enu, -z_enu)      # ENU -> NED
+orientation:  the same rotation, applied to the quaternion
+velocity:     (vx, -vy, -vz)                                      # FLU -> FRD, body
+```
+
+If you hand it NED already, it will rotate it a second time. Units are metres, m/s and
+radians throughout; nothing in this chain takes degrees.
+
+### 7.4 Wiring it in
+
+Just the bridge, against your own topic:
+
+```bash
+ros2 launch oakd_vslam_bringup px4_bridge.launch.py input_topic:=/my_vio/odometry
+```
+
+The whole stack with cuVSLAM replaced by yours — agent, camera driver, camera TF, bridge
+and competitor windows, no cuVSLAM:
+
+```bash
+host/run.sh shell                                          # one container, UART attached
+BRIDGE_INPUT_TOPIC=/my_vio/odometry run_full_stack.sh --no-slam
+```
+
+`--no-slam` (or `SKYBETA_NO_SLAM=1`) runs the depthai driver from the repo's own params
+file and publishes the `base_link → oak_parent_frame` static TF, so the TF tree and every
+camera topic are exactly as in §7.1 — minus `/oak/*/image_mono` and all of
+`/visual_slam/*`. Start your tracker in a new tmux window (`Ctrl-b c`) or a second
+`host/run.sh shell`.
+
+> `host/run.sh stack` forwards only the `CAMERA_*` variables into the container, so
+> `SKYBETA_NO_SLAM` and `BRIDGE_INPUT_TOPIC` have to be set **inside** it — hence
+> `host/run.sh shell` above. Same for `COMPETITOR_PKG`.
+
+**Tracking loss, and why the bridge wants to know.** When a tracker loses tracking and
+re-initialises, its pose jumps. If PX4 is not told, EKF2 integrates that jump as real
+motion — metres of phantom translation in one 30 Hz tick. The bridge handles this by
+watching a status topic and incrementing a wrapping `reset_counter` on every
+non-tracking → tracking transition.
+
+If your SLAM can signal tracking loss, publish
+`isaac_ros_visual_slam_interfaces/VisualSlamStatus` (`vo_state`: `0` unknown, `1` success,
+`2` failed) and point the bridge at it:
+
+```bash
+ros2 launch oakd_vslam_bringup px4_bridge.launch.py \
+    input_topic:=/my_vio/odometry status_topic:=/my_vio/status
+```
+
+If it cannot, you can leave `status_topic` at its default: with cuVSLAM not running nothing
+publishes `/visual_slam/status`, the subscription sits idle and `reset_counter` stays `0`.
+To switch it off explicitly you must run the node directly, because `ros2 launch` on Humble
+rejects an empty argument value (`status_topic:=` is a "malformed launch argument"):
+
+```bash
+ros2 run oakd_vslam_bringup px4_odom_bridge --ros-args \
+    -p input_topic:=/my_vio/odometry -p status_topic:=''
+```
+
+Either way the bridge logs which it chose (`status=/my_vio/status` or `status=unavailable`)
+on the line it prints at startup. **`reset_counter` stuck at 0 is a real hazard, not a
+formality** — it is [`debugging.md`](debugging.md) §4.2 suspect #3.
+
+### 7.5 `pose_frame` — leave it at `FRD`
+
+`pose_frame` defaults to `FRD` and you almost certainly want to keep it there.
+
+```
+uint8 POSE_FRAME_NED = 1 # NED earth-fixed frame
+uint8 POSE_FRAME_FRD = 2 # FRD world-fixed frame, arbitrary heading reference
+```
+
+A stereo VIO with no magnetometer and no gravity observation initialises its origin at the
+rig's **startup pose**: its x axis points wherever `base_link` pointed when your node came
+up, not north. That is the literal definition of `POSE_FRAME_FRD` — a valid local frame
+with an arbitrary heading reference. Declaring `NED` tells EKF2 the measurements are
+north-referenced when they are offset by a constant, so the position controller pushes at a
+fixed angle to the actual error and the vehicle orbits instead of converging. **That is the
+toilet-bowl mechanism**, and it is the first thing to check if you see one.
+
+Use `NED` only if your frame is *genuinely* north-aligned — you fuse a magnetometer, or you
+initialise the yaw from the FC's attitude. Declare FRD and let EKF2 estimate the rotation,
+**or** fuse EV yaw so the estimator adopts your heading. Do not do a partial version of
+both.
+
+```bash
+ros2 topic echo /fmu/in/vehicle_visual_odometry --field pose_frame   # must be 2
+```
+
+### 7.6 Covariance
+
+Fill `pose.covariance` with an honest 6×6, row-major, ordered `[x y z roll pitch yaw]`. The
+bridge takes the diagonal and maps it: position gets the ENU→NED x/y swap
+(`[pc[7], pc[0], pc[14]]`), orientation and velocity do not (FLU→FRD is sign flips only,
+and signs square out of a variance).
+
+Then temper your expectations. With `EKF2_EV_NOISE_MD = 0` — the shipped setting — PX4
+treats `EKF2_EVP_NOISE` / `EKF2_EVV_NOISE` / `EKF2_EVA_NOISE` as a **lower bound** on the
+variance in the message. cuVSLAM's own numbers are five to seven orders below
+`EKF2_EVP_NOISE = 0.1` (median σx ≈ 78 µm), so EKF2 clamps all six components and the
+message's values never reach the estimator. Yours will very likely be clamped too. Set
+`EKF2_EV_NOISE_MD = 1` if you want your covariance used directly, and only if you trust it.
+
+Do not publish an all-zero or identity covariance and hope. The bridge warns after 30
+consecutive identity-covariance messages (one full second), which is long enough to ignore
+a startup transient and short enough to catch a tracker that never fills the field.
+`min_position_variance:=<m^2>` is a stopgap floor if you need one.
+
+### 7.7 Checklist before you fly your own SLAM
+
+Props off, on the bench, in this order. Every step has a number you can read.
+
+1. **Odometry rate.** Your topic is not in `record_bag.sh`'s default set, so name it
+   explicitly — everything after `--` is handed to `ros2 bag record`:
+   ```bash
+   record_bag.sh --duration 60 -- /my_vio/odometry
+   ```
+   Then measure header-stamp deltas offline — **not** `ros2 topic hz`, which under-reports
+   this stack by ~10 % ([`debugging.md`](debugging.md) §0). You want **≥ 25 Hz** sustained
+   with no gap over ~100 ms.
+2. **The bridge is actually publishing.**
+   `ros2 topic hz /fmu/in/vehicle_visual_odometry` should track your odometry rate.
+3. **`pose_frame` is 2.**
+   `ros2 topic echo /fmu/in/vehicle_visual_odometry --field pose_frame --once`.
+4. **Scale.** Pick the vehicle up, translate it **1.0 m** along one axis, put it down.
+   `ros2 topic echo /my_vio/odometry --field pose.pose.position` must report 1.0 m, on the
+   axis you moved, with the right sign. A scale error here is a stereo-baseline error, so
+   go back to §7.2.
+5. **Heading.** Yaw the airframe ~90° by hand and compare your yaw against the FC's:
+   ```bash
+   ros2 topic echo /my_vio/odometry --field pose.pose.orientation
+   ros2 topic echo /fmu/out/vehicle_attitude --qos-reliability best_effort \
+                                             --qos-durability transient_local
+   ```
+   The two should change by the same amount. If they differ by a *constant* equal to the
+   heading at startup, your frame is startup-aligned — which is correct, and is exactly why
+   `pose_frame` is `FRD`.
+6. **Tracking loss is reported.** Cover the lenses until your tracker gives up, uncover,
+   and confirm `reset_counter` increments:
+   `ros2 topic echo /fmu/in/vehicle_visual_odometry --field reset_counter`.
+7. **Covariance is not identity.** `ros2 topic echo /my_vio/odometry --field pose.covariance --once`
+   and check the bridge's log is free of the identity-covariance warning.
+8. Only then §4, with the safety pilot, props on, at 1.5 m.
+
+---
+
+## 8. The advanced track — `competitor_advanced_cpp`
 
 `skybeta_flight_interface` drives PX4's built-in Offboard mode. The alternative is to
 register **your own flight mode** with PX4 using `px4_ros2_cpp`, which is what
@@ -318,7 +592,7 @@ switch.
 
 ---
 
-## 8. Package map
+## 9. Package map
 
 ```
 src/

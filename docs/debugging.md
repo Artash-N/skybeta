@@ -226,6 +226,29 @@ Beware: this is version-specific. In release-4.x the same parameter is
 `max_frame_delta_s` and the surrounding code differs. The image installs 3.2.6; read the
 `release-3.2` sources, not `latest`.
 
+### Odometry drops to ~11 Hz while a bag is recording
+
+The recording is the load. `/oak/{left,right}/image_raw` is 1024×640 **bgr8** at 30 Hz;
+writing the left eye alone produced **1.1 GB in 30 s** (~36 MB/s) and the pipeline degraded
+with it — camera **19.6 Hz**, cuVSLAM odometry **11.3 Hz**. Stop recording and both recover.
+
+`container_scripts/record_bag.sh` therefore **excludes images from its default set**:
+odometry, tracking status, `camera_info`, the IMU and every `/fmu/*` and `/skybeta/*` topic
+on the graph, which together are under ~100 kB/s. Images are opt-in:
+
+```bash
+record_bag.sh                     # light set -- safe to leave running
+record_bag.sh --images=mono       # the mono8 pair, ~1/3 the bytes of bgr8
+record_bag.sh --images=raw        # the bgr8 pair -- expect the degradation above
+record_bag.sh --all               # everything, images included
+```
+
+It prints a loud warning whenever images are in the set. The general rule: **recording raw
+images competes with the VIO pipeline for I/O and CPU**, so a bag that contains them tells
+you what the stack does *while being recorded*, not what it does in flight. Record images
+only when the images are the thing you are debugging, keep those runs short, and never
+quote a rate measured from one as the stack's rate.
+
 ### `vo_state` is 2 (lost), or tracking drifts absurdly
 
 ```bash
@@ -373,7 +396,8 @@ the estimator. Set `EKF2_EV_NOISE_MD = 1` only if you want the parameters used d
 
 ## 5. Offboard control
 
-See [`competitor_guide.md`](competitor_guide.md) §6 for the competitor-facing version.
+See [`competitor_guide.md`](competitor_guide.md) §6 for the competitor-facing version, and
+§7 if the team has replaced cuVSLAM with their own SLAM.
 The essentials:
 
 | Symptom | First check |

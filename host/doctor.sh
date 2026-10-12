@@ -100,7 +100,7 @@ else
   elif [[ "${n_fdt}" -eq 0 ]]; then
     warn "extlinux-fdt" "no FDT line -- booting the stock DTB, not ${fdt_val:-the patched one}"
   else
-    warn "extlinux-fdt" "${n_fdt} duplicate FDT lines (bug #2) -- run: host/jetson_uart_dma_fix.sh apply --dry-run"
+    warn "extlinux-fdt" "${n_fdt} duplicate FDT lines (bug #2) -- fix: sudo host/jetson_uart_dma_fix.sh apply  (rewrites extlinux.conf only, no reboot; preview with --dry-run)"
   fi
 fi
 

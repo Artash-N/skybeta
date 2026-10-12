@@ -100,16 +100,24 @@ check "-1 rejected"      "$(domain -1)"    "bad"
 check "text rejected"    "$(domain three)" "bad"
 check "008 ok (decimal, not octal)" "$(domain 008)" "ok"
 
-echo "[test] the Fast DDS profile is well-formed"
+echo "[test] the Fast DDS profiles are well-formed"
 # A malformed profile is silently ignored by Fast DDS, which then puts DDS on the
-# WiFi. `--` inside an XML comment is the easy way to break it.
-PROFILE="${HERE}/../dds/fastdds_localhost.xml"
+# WiFi. `--` inside an XML comment is the easy way to break one (done twice).
 if command -v python3 >/dev/null 2>&1 && python3 -c 'print()' >/dev/null 2>&1; then PY=python3; else PY=python; fi
-if "${PY}" -c 'import sys, xml.etree.ElementTree as E; E.parse(sys.argv[1])' "${PROFILE}" 2>/dev/null; then
-  ok "fastdds_localhost.xml parses"
-else
-  bad "fastdds_localhost.xml does not parse"
-fi
+for xml in "${HERE}"/../dds/*.xml; do
+  if "${PY}" -c 'import sys, xml.etree.ElementTree as E; E.parse(sys.argv[1])' "${xml}" 2>/dev/null; then
+    ok "$(basename "${xml}") parses"
+  else
+    bad "$(basename "${xml}") does not parse"
+  fi
+done
+for scope in local network; do
+  if grep -q 'profile_name="px4_participant"' "${HERE}/../dds/agent_refs_${scope}.xml" 2>/dev/null; then
+    ok "agent_refs_${scope}.xml defines px4_participant (the name PX4 asks for with PTCFG=2)"
+  else
+    bad "agent_refs_${scope}.xml missing or lacks profile px4_participant"
+  fi
+done
 
 echo
 echo "[test] ${pass} passed, ${fail} failed"

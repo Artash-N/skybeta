@@ -76,8 +76,9 @@ cat >&2 <<EOM
   1. Is run_agent.sh running, and did it print a session/client id?
   2. FC params: UXRCE_DDS_CFG=102, MAV_1_CONFIG=0, SER_TEL2_BAUD=921600,
      UXRCE_DDS_DOM_ID == ${ROS_DOMAIN_ID:-0} (ROS_DOMAIN_ID here, from drone.env).
-     Reboot the FC after changing them. A domain mismatch looks exactly like a
-     dead link: the agent connects, and its topics land in a domain nobody reads.
+     UXRCE_DDS_PTCFG == 2. Reboot the FC after changing them. A domain mismatch,
+     or PTCFG=0 in local DDS scope, looks exactly like a dead link: the agent
+     connects, and its topics land where nothing in this container can see them.
   3. The TELEM2 JST-GH connector on the dev unit is physically damaged
      (CLAUDE.md) -- a negative result here proves nothing until it is replaced.
   4. Topics present but silent => px4_msgs generation vs firmware mismatch

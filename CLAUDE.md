@@ -295,7 +295,7 @@ Then `mavproxy.py --master=/dev/ttyTHS1,57600 --show-errors`.
 | `SER_TEL2_BAUD` | `921600` | must match `run_agent.sh` / `XRCE_BAUD` |
 | `UXRCE_DDS_DOM_ID` | this drone's ID | **must equal `ROS_DOMAIN_ID`** in `/etc/skybeta/drone.env`. Per airframe; set by hand, not in the 02 file |
 | `UXRCE_DDS_KEY` | non-zero | unique per client; default is fine |
-| `UXRCE_DDS_PTCFG` | `0` | default |
+| `UXRCE_DDS_PTCFG` | `2` | custom participant: the agent builds it from `host/dds/agent_refs_<scope>.xml`. **With `0`, the loopback-only stack never sees `/fmu/*`** (bench-measured) |
 
 Reboot the FC after either change — every param above is reboot-gated.
 

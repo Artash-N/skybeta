@@ -20,7 +20,8 @@ the host, and only in the phases that genuinely require root.
 | `run.sh` | Launch the container: `stack`, `shell`, `bag`, `build`, `sim` |
 | `drone_env.sh` | Library: reads `/etc/skybeta/drone.env` (per-drone identity). Sourced by `run.sh` and `doctor.sh` |
 | `drone.env.example` | Template for `/etc/skybeta/drone.env` |
-| `dds/fastdds_localhost.xml` | Fast DDS profile that keeps DDS on the Jetson (`SKYBETA_DDS_SCOPE=local`) |
+| `dds/fastdds_localhost.xml` | Default Fast DDS profile for the ROS nodes: loopback + SHM (`SKYBETA_DDS_SCOPE=local`) |
+| `dds/agent_refs_{local,network}.xml` | MicroXRCEAgent `-r` file: PX4's participant (`UXRCE_DDS_PTCFG=2`) per scope |
 | `jetson_uart_dma_fix.sh` | The R36.5 UARTA DMA/IOMMU device-tree patch |
 | `build_image.sh` / `pull_image.sh` / `push_image.sh` | Image build and registry transport |
 | `uart_loopback_test.py` | Bench-test the Jetson TX/RX path with a jumper across pins 8 and 10 |
@@ -93,13 +94,29 @@ independent layers:
 
 1. **Per-drone domain.** `ROS_DOMAIN_ID` from `drone.env`, passed to every container; the FC's
    `UXRCE_DDS_DOM_ID` must match (the agent takes its domain from the FC, not from the env).
-2. **Localhost-only transport** (`SKYBETA_DDS_SCOPE=local`, the default). `run.sh` mounts
-   `dds/fastdds_localhost.xml` and sets `FASTRTPS_DEFAULT_PROFILES_FILE`. As the *default*
-   participant profile it binds every Fast DDS participant to loopback + shared memory:
-   verified for ROS nodes; for MicroXRCEAgent, confirm on the bench with
-   `tcpdump -ni wlan0 'udp portrange 7400-7700'` (expect nothing) while the stack runs. `ROS_LOCALHOST_ONLY` is deliberately not used: it does not
-   reach the agent, and on Humble it overrides the transports this file sets.
-   `SKYBETA_DDS_SCOPE=network` drops the profile for laptop debugging.
+2. **Localhost-only transport** (`SKYBETA_DDS_SCOPE=local`, the default). Two files, because
+   the agent does not take the default profile:
+   - `dds/fastdds_localhost.xml` — mounted as `FASTRTPS_DEFAULT_PROFILES_FILE`, the default
+     participant profile for every ROS node: loopback UDP + shared memory, initial-peer range 32.
+   - `dds/agent_refs_<scope>.xml` — mounted as `XRCE_REFS`, passed to `MicroXRCEAgent -r`. It
+     defines `px4_participant`, which the agent builds when the FC sets
+     **`UXRCE_DDS_PTCFG=2`**. With `PTCFG=0` PX4 sends its own participant XML, the agent
+     builds it on every interface, and the loopback-only ROS nodes never discover it:
+     `/fmu/*` silently never reaches the bridge.
+
+   Measured on the Orin (skybeta:0.2.0, `wlP1p1s0`, an XRCE client standing in for PX4):
+
+   | FC `UXRCE_DDS_PTCFG` | ROS node discovers the agent | DDS packets on WiFi |
+   |---|---|---|
+   | 0 | no | 15 |
+   | 1 (PX4 localhost-only) | yes, 1.4 s | 0 |
+   | 2 + `agent_refs_local.xml` | yes, 0.2 s | 0 |
+
+   Full stack in local scope: cuVSLAM odometry at 30 Hz, 0 DDS packets on WiFi in 30 s (71 in
+   `network` scope). `SKYBETA_DDS_SCOPE=network` drops the ROS profile and switches the agent to
+   `agent_refs_network.xml`, so a laptop on the same domain sees everything, `/fmu/*` included,
+   with no FC change. `ROS_LOCALHOST_ONLY` is deliberately not used: on Humble it overrides the
+   transports the profile sets, and it never reaches the agent.
 
 ## Team workspace
 

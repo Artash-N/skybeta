@@ -227,25 +227,38 @@ COMMON_ARG=(
 # keep one drone's DDS traffic (including /fmu/in/* setpoints the agent forwards
 # to the FC) away from every other drone:
 #   1. its own ROS_DOMAIN_ID, matched by UXRCE_DDS_DOM_ID on its FC;
-#   2. SKYBETA_DDS_SCOPE=local (default): a Fast DDS default profile that binds
-#      every Fast DDS participant to loopback + SHM (verified for the ROS nodes;
-#      MicroXRCEAgent should follow, as the default profile -- bench-check it).
+#   2. SKYBETA_DDS_SCOPE=local (default): every DDS participant on loopback.
+#      Two files, because the agent does not take the default profile:
+#        dds/fastdds_localhost.xml   default profile for the ROS nodes (SHM + UDP lo)
+#        dds/agent_refs_local.xml    the agent's PX4 participant, built by
+#                                    reference -- needs UXRCE_DDS_PTCFG=2 on the FC
+#      Measured on the bench: with PTCFG=0 the agent builds PX4's own XML on
+#      every interface, and the loopback-only ROS nodes never discover it.
 DDS_PROFILE="${HERE}/dds/fastdds_localhost.xml"
+AGENT_REFS="${HERE}/dds/agent_refs_${SKYBETA_DDS_SCOPE}.xml"
+
+# Fast DDS rejects a malformed profile with nothing but a log line and carries
+# on with its built-in transports -- straight onto the WiFi. Refuse instead.
+xml_ok() {
+  ! command -v python3 >/dev/null 2>&1 \
+    || python3 -c 'import sys, xml.etree.ElementTree as E; E.parse(sys.argv[1])' "$1" 2>/dev/null
+}
+[[ -f "${AGENT_REFS}" ]] || die "${AGENT_REFS} missing -- the agent cannot build PX4's participant"
+xml_ok "${AGENT_REFS}" || die "${AGENT_REFS} is not well-formed XML"
+
 DDS_ARG=(
   -e "ROS_DOMAIN_ID=${ROS_DOMAIN_ID}"
   -e "SKYBETA_DDS_SCOPE=${SKYBETA_DDS_SCOPE}"
   -e DRONE_ID
   -e TEAM
+  -v "${AGENT_REFS}:/etc/skybeta/agent_refs.xml:ro"
+  -e XRCE_REFS=/etc/skybeta/agent_refs.xml
 )
 case "${SKYBETA_DDS_SCOPE}" in
   local)
     [[ -f "${DDS_PROFILE}" ]] || die "${DDS_PROFILE} missing -- cannot keep DDS on this drone"
-    # Fast DDS rejects a malformed profile and carries on with its built-in
-    # transports, i.e. straight onto the WiFi, with nothing but a log line.
-    if command -v python3 >/dev/null 2>&1 \
-       && ! python3 -c 'import sys, xml.etree.ElementTree as E; E.parse(sys.argv[1])' "${DDS_PROFILE}" 2>/dev/null; then
-      die "${DDS_PROFILE} is not well-formed XML -- Fast DDS would ignore it and put DDS on every interface"
-    fi
+    xml_ok "${DDS_PROFILE}" \
+      || die "${DDS_PROFILE} is not well-formed XML -- Fast DDS would ignore it and put DDS on every interface"
     DDS_ARG+=(
       -v "${DDS_PROFILE}:/etc/skybeta/fastdds.xml:ro"
       -e FASTRTPS_DEFAULT_PROFILES_FILE=/etc/skybeta/fastdds.xml
@@ -339,6 +352,8 @@ case "${MODE}" in
       Flight-controller prerequisites (QGroundControl, then reboot the FC):
         MAV_1_CONFIG=0   UXRCE_DDS_CFG=102 (TELEM2)   SER_TEL2_BAUD=921600
         UXRCE_DDS_DOM_ID=${ROS_DOMAIN_ID}   (must equal ROS_DOMAIN_ID on this Jetson)
+        UXRCE_DDS_PTCFG=2    (agent builds PX4's participant from dds/agent_refs_${SKYBETA_DDS_SCOPE}.xml;
+                              with 0, /fmu/* never reaches the stack in local scope)
         EKF2_EV_CTRL=9 (horiz pos + yaw)   EKF2_HGT_REF=0 (Baro)   EKF2_BARO_CTRL=1
         EKF2_EV_DELAY = measured, not assumed   EKF2_EVP/EVV_NOISE=0.1  EKF2_EVA_NOISE=0.05
       See CLAUDE.md "Target PX4 parameter sets" -- MAV_1_CONFIG and UXRCE_DDS_CFG

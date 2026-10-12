@@ -113,6 +113,9 @@ If the echo hangs while the list looks healthy:
   drone's own domain from `/etc/skybeta/drone.env`, not 0; `host/run.sh stack` prints it. The
   agent creates its participant in whatever domain the FC asks for, so a mismatch connects
   cleanly and puts every `/fmu` topic where nothing is listening.
+- `UXRCE_DDS_PTCFG` on the FC must be `2`. With `0` the agent builds PX4's participant on every
+  interface while the stack's ROS nodes sit on loopback; they never discover each other, and it
+  looks exactly like a dead link. `run_agent.sh` prints the refs file it was given.
 - Anything outside the container (a laptop, a second container started by hand) only sees the
   drone with `SKYBETA_DDS_SCOPE=network` **and** the same `ROS_DOMAIN_ID`. The default `local`
   scope keeps DDS on loopback + shared memory.

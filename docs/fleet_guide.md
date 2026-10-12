@@ -319,6 +319,11 @@ then **reboot the FC**.
 
 This hands TELEM2 from MAVLink to the uXRCE-DDS client at 921600. **MAVProxy will stop
 working on this port — that is the expected outcome, not a regression.**
+The file also sets **`UXRCE_DDS_PTCFG = 2`**: PX4 asks the agent for its DDS participant by
+reference, and the agent builds it on loopback from `host/dds/agent_refs_local.xml`. Leave it
+at 0 and the stack connects, the agent reports a session, and not one `/fmu` message reaches
+the bridge — the ROS nodes are on loopback and the agent's participant is not.
+
 **Then set `UXRCE_DDS_DOM_ID` by hand** to this drone's `ROS_DOMAIN_ID` — the value in its
 `/etc/skybeta/drone.env` (convention: the drone number) — and reboot the FC again. It is
 deliberately not in the 02 file: it is the one DDS setting that must *differ* between drones.

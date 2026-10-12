@@ -5,13 +5,11 @@
   host/run.sh bind-mounts this file read-only at /etc/skybeta/fastdds.xml and
   points FASTRTPS_DEFAULT_PROFILES_FILE at it when SKYBETA_DDS_SCOPE=local (the
   default). Because it is the *default* participant profile, it applies to every
-  Fast DDS participant in the container: the ROS 2 nodes (rmw_fastrtps) AND
-  MicroXRCEAgent, which is not an rmw node and would ignore ROS_LOCALHOST_ONLY.
+  ROS 2 node (rmw_fastrtps) in the container. MicroXRCEAgent is handled by
+  agent_refs_local.xml instead; see the note at the end.
 
   Why not ROS_LOCALHOST_ONLY=1: on Humble, rmw_fastrtps implements it by replacing
-  the participant's transports, so it would fight this file, and it never reaches
-  the agent. The agent is the participant that matters most: without this, drone
-  A's /fmu/in/* setpoints are visible to drone B's agent on a shared network.
+  the participant's transports, so it would fight this file.
 
   Transports:
     SHM     same-host data path; needs the shared /dev/shm that `docker run
@@ -30,9 +28,12 @@
   Verified (ros:humble-ros-base, Fast DDS 2.6.12, rmw_fastrtps): 7 publishers +
   2 echo participants on one domain all discovered each other, 0 UDP packets on
   eth0; without this file, 294. With the default range of 4, only 4 of the 7
-  topics were discovered. NOT yet verified: that MicroXRCEAgent (its own Fast DDS
-  build) picks this profile up. Check on the bench with
-  `tcpdump -ni wlan0 'udp portrange 7400-7700'` while the stack runs.
+  topics were discovered. On the Orin (skybeta:0.2.0): full stack up, cuVSLAM
+  odometry at 30 Hz, 0 DDS packets on wlP1p1s0 in 30 s; 71 in network scope.
+
+  It does NOT reach MicroXRCEAgent (measured): the agent builds PX4's participant
+  from the client's own XML. That participant is configured separately, through
+  UXRCE_DDS_PTCFG=2 on the FC and agent_refs_local.xml.
 -->
 <dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
   <profiles>

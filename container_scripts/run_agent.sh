@@ -14,10 +14,14 @@
 # The agent does NOT read ROS_DOMAIN_ID: PX4's client tells it which domain to
 # create its participant in, from UXRCE_DDS_DOM_ID on the FC. That parameter must
 # therefore equal ROS_DOMAIN_ID here -- this drone's own domain (drone.env), not 0.
-# The localhost-only Fast DDS profile (FASTRTPS_DEFAULT_PROFILES_FILE, set by
-# host/run.sh) is the default participant profile, so it should bind the agent's
-# participant to loopback too, keeping /fmu/* off the WiFi. Proven for rmw nodes;
-# for the agent, confirm on the bench (tcpdump on wlan0 while the stack runs).
+# Which network interfaces the agent's participant uses is decided by the FC's
+# UXRCE_DDS_PTCFG, NOT by the default Fast DDS profile the ROS nodes use:
+#   0  PX4 sends its own participant XML; the agent builds it on every interface.
+#      In local scope the loopback-only ROS nodes then never discover it, so
+#      /fmu/* silently never reaches the bridge (measured on the bench).
+#   2  PX4 asks for the participant by reference ("px4_participant"); the agent
+#      builds it from XRCE_REFS (-r), which host/run.sh points at
+#      host/dds/agent_refs_<scope>.xml. This is the fleet setting.
 set -euo pipefail
 
 TRANSPORT="${XRCE_TRANSPORT:-serial}"
@@ -52,13 +56,25 @@ SKYBETA_UNDERLAY_ONLY=1
 # shellcheck source=container_scripts/skybeta_env.sh
 source skybeta_env.sh
 
-echo "[agent] ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0} -- the FC's UXRCE_DDS_DOM_ID must match;" \
-     "DDS profile: ${FASTRTPS_DEFAULT_PROFILES_FILE:-<none: all interfaces>}"
-
-if [[ "${TRANSPORT}" == "udp4" ]]; then
-  echo "[agent] MicroXRCEAgent udp4 -p ${UDP_PORT}"
-  exec MicroXRCEAgent udp4 -p "${UDP_PORT}" "${VERB_ARG[@]}"
+REFS_ARG=()
+if [[ -n "${XRCE_REFS:-}" ]]; then
+  if [[ ! -r "${XRCE_REFS}" ]]; then
+    echo "error: XRCE_REFS=${XRCE_REFS} is not readable -- PX4's participant (UXRCE_DDS_PTCFG=2)" >&2
+    echo "       cannot be created without it. host/run.sh mounts host/dds/agent_refs_<scope>.xml." >&2
+    exit 1
+  fi
+  REFS_ARG=(-r "${XRCE_REFS}")
+else
+  echo "[agent] WARNING: no XRCE_REFS -- with UXRCE_DDS_PTCFG=2 on the FC, participant creation will fail." >&2
 fi
 
-echo "[agent] MicroXRCEAgent serial --dev ${DEV} -b ${BAUD}"
-exec MicroXRCEAgent serial --dev "${DEV}" -b "${BAUD}" "${VERB_ARG[@]}"
+echo "[agent] ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0} (FC UXRCE_DDS_DOM_ID must match), scope ${SKYBETA_DDS_SCOPE:-?}," \
+     "participant refs ${XRCE_REFS:-<none>} (FC UXRCE_DDS_PTCFG must be 2)"
+
+if [[ "${TRANSPORT}" == "udp4" ]]; then
+  echo "[agent] MicroXRCEAgent udp4 -p ${UDP_PORT} ${REFS_ARG[*]}"
+  exec MicroXRCEAgent udp4 -p "${UDP_PORT}" "${REFS_ARG[@]}" "${VERB_ARG[@]}"
+fi
+
+echo "[agent] MicroXRCEAgent serial --dev ${DEV} -b ${BAUD} ${REFS_ARG[*]}"
+exec MicroXRCEAgent serial --dev "${DEV}" -b "${BAUD}" "${REFS_ARG[@]}" "${VERB_ARG[@]}"

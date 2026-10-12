@@ -202,14 +202,17 @@ The stack launcher opens a tmux window named `competitor`:
 host/run.sh stack            # windows: agent, slam, bridge, competitor
 ```
 
-That window runs `ros2 launch competitor_example competitor.launch.py`, which starts
-`flight_interface` **and** the example node. Point it at your own package instead:
+That window builds your team workspace (below), then runs `ros2 launch competitor_example
+competitor.launch.py`, which starts `flight_interface` **and** the example node. Point it at
+your own package by setting `COMPETITOR_PKG` / `COMPETITOR_LAUNCH` in `/etc/skybeta/drone.env`,
+or for one run:
 
 ```bash
 COMPETITOR_PKG=my_team_nav COMPETITOR_LAUNCH=my_mission.launch.py host/run.sh stack
 ```
 
-Or work by hand in a shell on the running container:
+Or work by hand in a shell on the running container (`host/run.sh shell` attaches to the
+running stack if there is one):
 
 ```bash
 host/run.sh shell
@@ -219,15 +222,69 @@ ros2 run my_team_nav my_node
 
 ### Writing your own
 
-Fork `src/competitor_example/competitor_example/square_mission.py`. It is heavily commented
-and does nothing you will not need: wait for Offboard, capture a start pose, publish ENU
-setpoints on a timer, check arrival with `math.dist`, advance a state machine, notice when
-Offboard is lost.
+**Your code lives in `~/team_ws/src` on the drone** — the team workspace. `host/run.sh`
+bind-mounts it at `/root/team_ws` in every container, so it survives the container exiting
+(every container here is `--rm`) and survives the organisers updating the skybeta image. Code
+anywhere else inside a container — including `/root/skybeta_ws/src` — is gone the moment the
+container stops.
+
+Start from the example:
+
+```bash
+# on the drone (host shell)
+cp -r ~/skybeta/src/competitor_example ~/team_ws/src/my_team_nav
+# ...rename the package in package.xml / setup.py / setup.cfg / resource/, then:
+```
+
+Fork `square_mission.py` inside it. It is heavily commented and does nothing you will not
+need: wait for Offboard, capture a start pose, publish ENU setpoints on a timer, check arrival
+with `math.dist`, advance a state machine, notice when Offboard is lost.
 
 Keep `flight_interface` in your launch file exactly as `competitor.launch.py` has it.
 
-`colcon build --symlink-install --packages-select my_team_nav` inside the container; a Python
-package with `--symlink-install` picks up edits on the next `ros2 run` with no rebuild.
+Build inside the container — the stack's `competitor` window does this automatically on
+start:
+
+```bash
+team_build.sh                                  # whole workspace
+team_build.sh --packages-select my_team_nav    # any colcon arguments
+```
+
+It builds `/root/team_ws` as an overlay on the skybeta workspace and hands the files back to
+your host user. A Python package built with `--symlink-install` (the default here) picks up
+edits on the next `ros2 run` with no rebuild. New shells source the overlay automatically.
+
+**Do not put `px4_msgs` in your workspace.** PX4's own tutorials tell you to clone it; here
+the image already carries the generation that matches the flight controller (`release/1.16`
+for v1.16.2), and a different one connects, lists every topic, and moves no data.
+`team_build.sh` warns about any package that shadows one the image already has. The VIO → FC
+pipeline (agent, cuVSLAM, bridge) never loads your overlay, so a mistake here can break your
+code but not the drone's state estimate.
+
+#### Extra system or Python packages
+
+Never `apt install` or `pip install` in a running container — it vanishes on exit. Put them
+in a team image instead, layered on the pinned skybeta base:
+
+```bash
+host/run.sh build --init     # writes ~/team_ws/Dockerfile + .dockerignore
+# edit ~/team_ws/Dockerfile: RUN apt-get install ... / RUN pip3 install ...
+host/run.sh build            # builds skybeta-team:<VERSION>
+host/run.sh stack            # uses the team image automatically from now on
+```
+
+When the organisers roll out a new skybeta version, run `host/run.sh build` again: the team
+image is tagged per base version, and the stack falls back to the plain base (with a warning)
+until you rebuild.
+
+#### Your drone's DDS domain
+
+Each drone has its own `ROS_DOMAIN_ID`, set in `/etc/skybeta/drone.env`, and by default its DDS
+traffic never leaves the Jetson. Everything started through `host/run.sh` gets both
+automatically. To use rviz2 or `ros2 topic echo` from a laptop, set
+`SKYBETA_DDS_SCOPE=network` in `drone.env`, restart the stack, and export the same
+`ROS_DOMAIN_ID` on the laptop. Switch it back before flying: in `network` scope, the camera
+streams go over the WiFi.
 
 ### Recording a bag
 

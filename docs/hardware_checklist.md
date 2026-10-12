@@ -195,7 +195,7 @@ setting `EKF2_EV_POS_*` while the static TF also carries the lever arm applies t
 `doctor.sh` covers, without needing sudo: L4T release · UARTA `iommus`/`dmas` in the live
 device tree · `3100000.serial` bound to `serial-tegra` owning `ttyTHS1` · exactly one
 `FDT` line in `extlinux.conf` · `dialout` + `docker` membership · docker `nvidia` runtime
-· OAK-D enumerated · UART traffic · image present · power model.
+· OAK-D enumerated · UART traffic · image present · power model · drone identity (`drone.env`, DDS domain) · team workspace.
 
 Two results that are expected on a bench unit and are **not** faults: `uart-traffic` FAILs
 when the FC is unpowered or the cable is the suspect one (§1.1), and `oakd-usb` reporting

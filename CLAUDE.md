@@ -293,7 +293,7 @@ Then `mavproxy.py --master=/dev/ttyTHS1,57600 --show-errors`.
 | `MAV_1_CONFIG` | `0` | Disabled — frees TELEM 2 |
 | `UXRCE_DDS_CFG` | `102` | TELEM 2 |
 | `SER_TEL2_BAUD` | `921600` | must match `run_agent.sh` / `XRCE_BAUD` |
-| `UXRCE_DDS_DOM_ID` | `0` | **must equal `ROS_DOMAIN_ID`** on the Jetson |
+| `UXRCE_DDS_DOM_ID` | this drone's ID | **must equal `ROS_DOMAIN_ID`** in `/etc/skybeta/drone.env`. Per airframe; set by hand, not in the 02 file |
 | `UXRCE_DDS_KEY` | non-zero | unique per client; default is fine |
 | `UXRCE_DDS_PTCFG` | `0` | default |
 

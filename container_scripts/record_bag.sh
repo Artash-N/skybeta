@@ -39,12 +39,10 @@ if [[ -n "${DURATION}" && ! "${DURATION}" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
-# ROS 2 setup scripts touch unset vars (AMENT_TRACE_SETUP_FILES etc.);
-# relax nounset just for the source then re-enable.
-set +u
-source /opt/ros/humble/setup.bash
-source /root/skybeta_ws/install/local_setup.bash
-set -u
+# ROS + skybeta underlay + the team overlay (if built), so team-defined message
+# types resolve. skybeta_env.sh handles the nounset dance the ROS setup scripts need.
+# shellcheck source=container_scripts/skybeta_env.sh
+source skybeta_env.sh
 
 BAG_PATH="${OUTPUT:-${BAG_DIR}/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$(dirname "${BAG_PATH}")"

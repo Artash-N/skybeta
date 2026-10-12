@@ -109,8 +109,13 @@ decoration.
 
 If the echo hangs while the list looks healthy:
 
-- `UXRCE_DDS_DOM_ID` on the FC must equal `ROS_DOMAIN_ID` in the container (both 0 by
-  default).
+- `UXRCE_DDS_DOM_ID` on the FC must equal `ROS_DOMAIN_ID` in the container. That is this
+  drone's own domain from `/etc/skybeta/drone.env`, not 0; `host/run.sh stack` prints it. The
+  agent creates its participant in whatever domain the FC asks for, so a mismatch connects
+  cleanly and puts every `/fmu` topic where nothing is listening.
+- Anything outside the container (a laptop, a second container started by hand) only sees the
+  drone with `SKYBETA_DDS_SCOPE=network` **and** the same `ROS_DOMAIN_ID`. The default `local`
+  scope keeps DDS on loopback + shared memory.
 - `px4_msgs` must match the firmware generation. The image pins `release/1.16` and the
   installed `VehicleOdometry.msg` carries `MESSAGE_VERSION`; that field's presence is the
   quick proof you are not on a 1.14 build.

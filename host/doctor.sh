@@ -240,6 +240,60 @@ else
   fi
 fi
 
+# 11 -- per-drone identity: /etc/skybeta/drone.env ---------------------------
+# Without it every drone sits on DDS domain 0, and on a shared network every
+# agent can see every other drone's /fmu/in/* setpoints.
+# shellcheck source=host/drone_env.sh
+source "${HERE}/drone_env.sh"
+skybeta_load_drone_env
+ID_FILE="${SKYBETA_DRONE_ENV:-/etc/skybeta/drone.env}"
+scope="${SKYBETA_DDS_SCOPE:-local}"
+if [[ -z "${SKYBETA_DRONE_ENV_FILE}" ]]; then
+  warn "drone-identity" "no ${ID_FILE} -- anonymous drone on domain ${ROS_DOMAIN_ID:-0}. Fine alone on a bench; required before a second drone joins the network (host/drone.env.example)"
+elif ! derr="$(skybeta_check_domain)"; then
+  fail "drone-identity" "${ID_FILE}: ${derr}"
+elif [[ "${scope}" != "local" && "${scope}" != "network" ]]; then
+  fail "drone-identity" "${ID_FILE}: SKYBETA_DDS_SCOPE='${scope}' -- expected local or network"
+elif [[ "${ROS_DOMAIN_ID:-0}" == "0" ]]; then
+  warn "drone-identity" "drone ${DRONE_ID:-?} is on ROS_DOMAIN_ID 0, the shared default. Set ROS_DOMAIN_ID=${DRONE_ID:-<n>} in ${ID_FILE} and UXRCE_DDS_DOM_ID to match on the FC"
+else
+  id_msg="drone ${DRONE_ID:-?} team ${TEAM:-?} domain ${ROS_DOMAIN_ID} DDS ${scope} -- FC UXRCE_DDS_DOM_ID must be ${ROS_DOMAIN_ID}"
+  [[ -n "${SKYBETA_DRONE_ENV_IGNORED}" ]] && id_msg+="; ignored unknown keys: ${SKYBETA_DRONE_ENV_IGNORED}"
+  if [[ "${scope}" == "network" ]]; then
+    warn "drone-identity" "${id_msg}. Scope 'network' puts the camera streams on the WiFi -- debugging only"
+  else
+    pass "drone-identity" "${id_msg}"
+  fi
+fi
+
+# 12 -- team workspace ---------------------------------------------------------
+TEAM_WS="${TEAM_WS:-${HOME}/team_ws}"
+if [[ ! -d "${TEAM_WS}" ]]; then
+  warn "team-ws" "${TEAM_WS} does not exist yet (host/run.sh creates it on first start)"
+else
+  n_pkg="$(find "${TEAM_WS}/src" -name package.xml 2>/dev/null | wc -l | tr -d ' ')"
+  overlay="not built"
+  [[ -f "${TEAM_WS}/install/local_setup.bash" ]] && overlay="built"
+  # The container runs as root; anything it created that team_build.sh has not
+  # chowned back is uneditable from the host shell.
+  foreign="$(find "${TEAM_WS}" ! -user "$(id -u)" -print -quit 2>/dev/null)"
+  team_img=""
+  if [[ -f "${TEAM_WS}/Dockerfile" ]]; then
+    if docker image inspect "skybeta-team:${TAG}" >/dev/null 2>&1; then
+      team_img=", team image skybeta-team:${TAG}"
+    else
+      team_img=", team image NOT built for ${TAG} (host/run.sh build)"
+    fi
+  fi
+  if [[ -n "${foreign}" ]]; then
+    warn "team-ws" "${TEAM_WS} has files not owned by $(id -un), e.g. ${foreign#"${TEAM_WS}/"} -- created as root in a container. Fix: sudo chown -R $(id -un): ${TEAM_WS}"
+  elif [[ "${team_img}" == *"NOT built"* ]]; then
+    warn "team-ws" "${TEAM_WS}: ${n_pkg} package(s), overlay ${overlay}${team_img}"
+  else
+    pass "team-ws" "${TEAM_WS}: ${n_pkg} package(s), overlay ${overlay}${team_img}"
+  fi
+fi
+
 # --------------------------------------------------------------------------
 echo
 printf 'doctor: %d PASS  %d WARN  %d FAIL\n' "${n_pass}" "${n_warn}" "${n_fail}"

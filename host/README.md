@@ -17,11 +17,15 @@ the host, and only in the phases that genuinely require root.
 |---|---|
 | `provision.sh` | One idempotent, resumable entry point: apt deps → UART patch → power → image → doctor |
 | `doctor.sh` | Unprivileged health check. Non-zero exit on any FAIL |
-| `run.sh` | Launch the container: `stack`, `shell`, `bag`, `sim` |
+| `run.sh` | Launch the container: `stack`, `shell`, `bag`, `build`, `sim` |
+| `drone_env.sh` | Library: reads `/etc/skybeta/drone.env` (per-drone identity). Sourced by `run.sh` and `doctor.sh` |
+| `drone.env.example` | Template for `/etc/skybeta/drone.env` |
+| `dds/fastdds_localhost.xml` | Fast DDS profile that keeps DDS on the Jetson (`SKYBETA_DDS_SCOPE=local`) |
 | `jetson_uart_dma_fix.sh` | The R36.5 UARTA DMA/IOMMU device-tree patch |
 | `build_image.sh` / `pull_image.sh` / `push_image.sh` | Image build and registry transport |
 | `uart_loopback_test.py` | Bench-test the Jetson TX/RX path with a jumper across pins 8 and 10 |
 | `tests/test_extlinux_fix.sh` | Unit test for the extlinux FDT rewrite |
+| `tests/test_drone_env.sh` | Unit test for the `drone.env` parser |
 
 ## First-time setup
 
@@ -61,10 +65,10 @@ host/doctor.sh --boot-camera    # also opens the OAK-D and reads getUsbSpeed()
 host/doctor.sh --no-uart        # skip the 3 s serial sniff
 ```
 
-Ten checks: L4T release · UARTA `iommus`/`dmas` in the live device tree ·
+Twelve checks: L4T release · UARTA `iommus`/`dmas` in the live device tree ·
 `3100000.serial` bound to `serial-tegra` owning `ttyTHS1` · exactly one `FDT`
 line in `extlinux.conf` · `dialout` + `docker` membership · docker `nvidia`
-runtime · OAK-D enumerated · UART traffic · image present · power model.
+runtime · OAK-D enumerated · UART traffic · image present · power model · drone identity (`drone.env`, DDS domain) · team workspace.
 
 `PASS`/`WARN`/`FAIL`, one line each; exit 1 if anything FAILed. Two results
 are worth knowing in advance on the dev unit:
@@ -76,13 +80,51 @@ are worth knowing in advance on the dev unit:
   twice; it re-appears as `03e7:f63b` at 5000 Mbps once depthai pushes
   firmware. Use `--boot-camera` if you actually need the link speed.
 
+## Per-drone identity and DDS isolation
+
+`/etc/skybeta/drone.env` (template: `drone.env.example`) is the one file that differs between
+drones: `DRONE_ID`, `TEAM`, `ROS_DOMAIN_ID`, `SKYBETA_DDS_SCOPE`, `CAMERA_*`, `TEAM_WS`,
+`COMPETITOR_PKG`/`COMPETITOR_LAUNCH`. It is parsed, not sourced: whitelisted keys only, values
+literal. The caller's environment overrides it; positional camera args override both.
+
+Every container is `--network host`, so without this every drone's DDS — including the
+`/fmu/in/*` setpoints the agent forwards to the FC — would share domain 0 on the WiFi. Two
+independent layers:
+
+1. **Per-drone domain.** `ROS_DOMAIN_ID` from `drone.env`, passed to every container; the FC's
+   `UXRCE_DDS_DOM_ID` must match (the agent takes its domain from the FC, not from the env).
+2. **Localhost-only transport** (`SKYBETA_DDS_SCOPE=local`, the default). `run.sh` mounts
+   `dds/fastdds_localhost.xml` and sets `FASTRTPS_DEFAULT_PROFILES_FILE`. As the *default*
+   participant profile it binds every Fast DDS participant to loopback + shared memory:
+   verified for ROS nodes; for MicroXRCEAgent, confirm on the bench with
+   `tcpdump -ni wlan0 'udp portrange 7400-7700'` (expect nothing) while the stack runs. `ROS_LOCALHOST_ONLY` is deliberately not used: it does not
+   reach the agent, and on Humble it overrides the transports this file sets.
+   `SKYBETA_DDS_SCOPE=network` drops the profile for laptop debugging.
+
+## Team workspace
+
+`$TEAM_WS` (default `~/team_ws`) is created by `run.sh` as the invoking user and bind-mounted
+at `/root/team_ws`. Inside the container, `team_build.sh` builds it as an overlay;
+`skybeta_env.sh` sources it for shells, `check_topics.sh`, `record_bag.sh` and the stack's
+`competitor` window — but **not** for the agent, cuVSLAM or the bridge, so a team package that
+shadows an underlay one cannot reach the VIO → FC path.
+
+```bash
+host/run.sh build --init     # template $TEAM_WS/Dockerfile (+ .dockerignore)
+host/run.sh build            # skybeta-team:<VERSION> FROM skybeta:<VERSION>
+```
+
+Once built, `stack`/`shell` use `skybeta-team:<VERSION>` automatically. It is labelled
+`io.skybeta.base` / `io.skybeta.base-id`. After a base update the stack falls back to the base
+image with a warning until the team rebuilds.
+
 ## Running the stack
 
 ```bash
 host/run.sh stack                          # camera at the body origin
 host/run.sh stack 0.10 0 -0.02             # x y z, metres, FLU
 host/run.sh stack 0.10 0 -0.02 0 0.35 0    # ...plus roll pitch yaw, radians
-host/run.sh shell                          # interactive bash, or exec into a running container
+host/run.sh shell                          # interactive bash, or exec into the running stack
 host/run.sh bag                            # rosbag2 into ./bags (needs WP6's record_bag.sh)
 host/run.sh sim                            # stub — WP7
 ```
@@ -92,14 +134,16 @@ passed in as `CAMERA_X/Y/Z` and `CAMERA_ROLL/PITCH/YAW`. Keep `EKF2_EV_POS_*`
 at zero on the flight controller: the TF already carries the lever arm, and
 setting both applies it twice (`CLAUDE.md` bug #9).
 
-Image reference: `skybeta:$(cat VERSION)`, falling back to `skybeta:latest`.
-Override the whole thing with `IMAGE=`. Other knobs: `NAME=`, `DEV=`
-(default `/dev/ttyTHS1`), `XRCE_BAUD=`, `BAGDIR=`.
+Image reference: `skybeta-team:$(cat VERSION)` if the team image is built, else
+`skybeta:$(cat VERSION)`, falling back to `skybeta:latest`. Override the whole thing with
+`IMAGE=`. Other knobs: `NAME=`, `DEV=` (default `/dev/ttyTHS1`), `XRCE_BAUD=`, `BAGDIR=`,
+`SKYBETA_DRONE_ENV=` (alternate identity file), plus every `drone.env` key.
 
-`stack` and `shell` refuse to start when another running container already has
+`stack` refuses to start when another running container already has
 `/dev/ttyTHS1` passed through — the check inspects every running container's
 device list, not just the names this script uses. Two MicroXRCEAgents on one
-serial port corrupt each other's framing.
+serial port corrupt each other's framing. `shell` in the same situation opens a
+shell inside the container that holds the port (normally the running stack).
 
 There is no `sudo` in `run.sh`. The old `sudo systemctl stop nvgetty` and
 `sudo chmod 666 $DEV` lines were no-ops here: `nvgetty.service` does not exist

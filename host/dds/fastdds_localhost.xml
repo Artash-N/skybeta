@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  skybeta: keep DDS on this Jetson.
+
+  host/run.sh bind-mounts this file read-only at /etc/skybeta/fastdds.xml and
+  points FASTRTPS_DEFAULT_PROFILES_FILE at it when SKYBETA_DDS_SCOPE=local (the
+  default). Because it is the *default* participant profile, it applies to every
+  Fast DDS participant in the container: the ROS 2 nodes (rmw_fastrtps) AND
+  MicroXRCEAgent, which is not an rmw node and would ignore ROS_LOCALHOST_ONLY.
+
+  Why not ROS_LOCALHOST_ONLY=1: on Humble, rmw_fastrtps implements it by replacing
+  the participant's transports, so it would fight this file, and it never reaches
+  the agent. The agent is the participant that matters most: without this, drone
+  A's /fmu/in/* setpoints are visible to drone B's agent on a shared network.
+
+  Transports:
+    SHM     same-host data path; needs the shared /dev/shm that `docker run
+            ipc host` already gives every skybeta container.
+    UDPv4   whitelisted to 127.0.0.1 only. Nothing is sent on wlan0/eth0.
+
+  Discovery: loopback has no multicast, so participants find each other through
+  unicast initial peers on 127.0.0.1. Fast DDS probes one port per participant
+  ID, for IDs 0..maxInitialPeersRange-1. The default range is 4, and this stack
+  has more participants than that on one domain (agent, cuVSLAM container,
+  bridge, flight interface, competitor nodes, rosbag, every `ros2` CLI call), so
+  the range is raised to 32.
+
+  The per-drone ROS_DOMAIN_ID is the second, independent layer of isolation.
+
+  Verified (ros:humble-ros-base, Fast DDS 2.6.12, rmw_fastrtps): 7 publishers +
+  2 echo participants on one domain all discovered each other, 0 UDP packets on
+  eth0; without this file, 294. With the default range of 4, only 4 of the 7
+  topics were discovered. NOT yet verified: that MicroXRCEAgent (its own Fast DDS
+  build) picks this profile up. Check on the bench with
+  `tcpdump -ni wlan0 'udp portrange 7400-7700'` while the stack runs.
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>skybeta_shm</transport_id>
+        <type>SHM</type>
+        <maxInitialPeersRange>32</maxInitialPeersRange>
+      </transport_descriptor>
+      <transport_descriptor>
+        <transport_id>skybeta_udp_loopback</transport_id>
+        <type>UDPv4</type>
+        <maxInitialPeersRange>32</maxInitialPeersRange>
+        <interfaceWhiteList>
+          <address>127.0.0.1</address>
+        </interfaceWhiteList>
+      </transport_descriptor>
+    </transport_descriptors>
+
+    <participant profile_name="skybeta_localhost" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>skybeta_shm</transport_id>
+          <transport_id>skybeta_udp_loopback</transport_id>
+        </userTransports>
+        <useBuiltinTransports>false</useBuiltinTransports>
+        <builtin>
+          <initialPeersList>
+            <locator>
+              <udpv4>
+                <address>127.0.0.1</address>
+              </udpv4>
+            </locator>
+          </initialPeersList>
+        </builtin>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>

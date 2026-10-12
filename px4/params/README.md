@@ -71,5 +71,7 @@ you move the airframe by hand.
 
 - **`EKF2_EV_DELAY = 50`** — a guess. Measure the real end-to-end latency (camera → depthai →
   GPU mono8 conversion → cuVSLAM → DDS → serial) and set it. A wrong delay is a prime toilet-bowl cause.
-- **`UXRCE_DDS_DOM_ID = 0`** — must match `ROS_DOMAIN_ID` on the Jetson. Unset there, so 0 is
-  right today.
+- **`UXRCE_DDS_DOM_ID`** — no longer in `02_telem2_uxrce_dds.params`: it is **per airframe**.
+  Set it by hand to that drone's `ROS_DOMAIN_ID` from `/etc/skybeta/drone.env` (convention:
+  `= DRONE_ID`). On a shared network, every drone left on 0 shares one DDS domain.
+  `param_diff` treats it like `MAV_SYS_ID`: excluded from the fleet comparison.

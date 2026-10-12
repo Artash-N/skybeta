@@ -146,9 +146,11 @@ COPY container_scripts/ /usr/local/bin/
 # in a confusing way.
 RUN chmod +x /usr/local/bin/*.sh
 
-# 7. Auto-source ROS + workspace for interactive shells.
-RUN echo 'source /opt/ros/humble/setup.bash'                       >> /root/.bashrc \
- && echo 'source /root/skybeta_ws/install/local_setup.bash'        >> /root/.bashrc
+# 7. Auto-source ROS + the skybeta underlay + the team overlay (/root/team_ws,
+#    bind-mounted from the host by host/run.sh) for interactive shells. One file,
+#    container_scripts/skybeta_env.sh, so shells and scripts cannot disagree.
+RUN echo 'source /usr/local/bin/skybeta_env.sh' >> /root/.bashrc \
+ && mkdir -p /root/team_ws/src
 
 # 8. Provenance, readable without a shell:
 #    docker inspect --format '{{json .Config.Labels}}' skybeta:<tag>

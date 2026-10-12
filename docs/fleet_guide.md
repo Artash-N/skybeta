@@ -173,6 +173,25 @@ Five phases, recorded one per line in `$HOME/.skybeta/state`:
 | `pull` | no | pulls the image at the tag in `VERSION`. Needs `REGISTRY` set |
 | `doctor` | no | the health check |
 
+### Give the drone its identity
+
+Every Jetson carries `/etc/skybeta/drone.env`: drone number, team, **DDS domain**, camera
+mount and the team workspace. It is what turns ten identical images into ten separate drones
+on one network. Start from the template:
+
+```bash
+sudo install -D -m 0644 host/drone.env.example /etc/skybeta/drone.env
+sudoedit /etc/skybeta/drone.env        # DRONE_ID=3, ROS_DOMAIN_ID=3, TEAM=..., CAMERA_*
+```
+
+`ROS_DOMAIN_ID` = the drone number, unique across the fleet, 1–99. Step 5 sets the FC's
+`UXRCE_DDS_DOM_ID` to the same number. Leave `SKYBETA_DDS_SCOPE=local`: DDS then stays on the
+Jetson (loopback + shared memory) and nothing — not even the 30 Hz camera streams — goes over
+the WiFi. Flip it to `network` only to debug from a laptop on the same domain.
+
+`host/run.sh` reads this file on every start and prints the drone, domain and scope in its
+banner; without it, it warns and runs as an anonymous drone on domain 0.
+
 ### The reboot, and resuming
 
 The first run stops after `uart_patch` and tells you to reboot. That is a successful run,
@@ -227,11 +246,11 @@ host/doctor.sh
 echo "doctor exit: $?"
 ```
 
-Ten checks, `PASS`/`WARN`/`FAIL` one line each, exit 1 if anything FAILed: L4T release ·
+Twelve checks, `PASS`/`WARN`/`FAIL` one line each, exit 1 if anything FAILed: L4T release ·
 UARTA `iommus`/`dmas` in the live device tree · `3100000.serial` bound to `serial-tegra`
 owning `ttyTHS1` · exactly one `FDT` line in `extlinux.conf` · `dialout` + `docker`
 membership · docker `nvidia` runtime · OAK-D enumerated · UART traffic · image present ·
-power model.
+power model · drone identity (`drone.env`, DDS domain) · team workspace.
 
 Two expected non-failures at this point in the guide:
 
@@ -300,7 +319,11 @@ then **reboot the FC**.
 
 This hands TELEM2 from MAVLink to the uXRCE-DDS client at 921600. **MAVProxy will stop
 working on this port — that is the expected outcome, not a regression.**
-`UXRCE_DDS_DOM_ID` must equal `ROS_DOMAIN_ID` on the Jetson; both default to 0.
+**Then set `UXRCE_DDS_DOM_ID` by hand** to this drone's `ROS_DOMAIN_ID` — the value in its
+`/etc/skybeta/drone.env` (convention: the drone number) — and reboot the FC again. It is
+deliberately not in the 02 file: it is the one DDS setting that must *differ* between drones.
+Leave ten drones on domain 0 and every agent on the WiFi can see every other drone's
+`/fmu/in/*` setpoints.
 
 ```bash
 host/run.sh stack        # tmux windows: agent, slam, bridge, competitor
@@ -565,18 +588,18 @@ competition day.
 Keep one row per airframe. The columns are the ones that have actually distinguished two
 drones in practice.
 
-| Serial | Jetson hostname | FC firmware | Image tag | Image digest | Cal. date | `EKF2_EV_DELAY` (ms) | Camera x/y/z, r/p/y | TELEM2 cable | Last param_diff clean | Notes |
-|---|---|---|---|---|---|---|---|---|---|---|
-| `SN0001` | `skybeta-01` | v1.16.2 | `0.1.0` | `sha256:…` | 2026-09-03 | | | new 2026-09-03 | 2026-09-03 | reference airframe |
-| `SN0002` | `skybeta-02` | | | | | | | | | |
-| `SN0003` | `skybeta-03` | | | | | | | | | |
-| `SN0004` | `skybeta-04` | | | | | | | | | |
-| `SN0005` | `skybeta-05` | | | | | | | | | |
-| `SN0006` | `skybeta-06` | | | | | | | | | |
-| `SN0007` | `skybeta-07` | | | | | | | | | |
-| `SN0008` | `skybeta-08` | | | | | | | | | |
-| `SN0009` | `skybeta-09` | | | | | | | | | |
-| `SN0010` | `skybeta-10` | | | | | | | | | |
+| Serial | Jetson hostname | Domain ID | FC firmware | Image tag | Image digest | Cal. date | `EKF2_EV_DELAY` (ms) | Camera x/y/z, r/p/y | TELEM2 cable | Last param_diff clean | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `SN0001` | `skybeta-01` | 1 | v1.16.2 | `0.1.0` | `sha256:…` | 2026-09-03 | | | new 2026-09-03 | 2026-09-03 | reference airframe |
+| `SN0002` | `skybeta-02` | 2 | | | | | | | | | |
+| `SN0003` | `skybeta-03` | 3 | | | | | | | | | |
+| `SN0004` | `skybeta-04` | 4 | | | | | | | | | |
+| `SN0005` | `skybeta-05` | 5 | | | | | | | | | |
+| `SN0006` | `skybeta-06` | 6 | | | | | | | | | |
+| `SN0007` | `skybeta-07` | 7 | | | | | | | | | |
+| `SN0008` | `skybeta-08` | 8 | | | | | | | | | |
+| `SN0009` | `skybeta-09` | 9 | | | | | | | | | |
+| `SN0010` | `skybeta-10` | 10 | | | | | | | | | |
 
 Per-airframe physical details — OAK-D serial, IMU part, kill-switch channel, radio
 calibration date — go in the record card at the end of

@@ -99,6 +99,9 @@ EXCLUSIONS = [
      "pair, set by QGC's Radio calibration"),
     (lambda n: n == "MAV_SYS_ID",
      "MAVLink system id must be UNIQUE per airframe on a shared GCS link"),
+    (lambda n: n == "UXRCE_DDS_DOM_ID",
+     "DDS domain must be UNIQUE per airframe on a shared network; equals "
+     "ROS_DOMAIN_ID in that drone's /etc/skybeta/drone.env"),
     (lambda n: n in ("COM_FLIGHT_UUID", "LND_FLIGHT_T_HI", "LND_FLIGHT_T_LO"),
      "cumulative flight counters -- runtime state, not configuration"),
     (lambda n: n.startswith("_"),

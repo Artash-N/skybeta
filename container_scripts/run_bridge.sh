@@ -4,12 +4,12 @@
 # frame conversion and PX4 BEST_EFFORT QoS. Source: oakd_vslam_bringup.
 set -euo pipefail
 
-# ROS 2 setup scripts touch unset vars (AMENT_TRACE_SETUP_FILES etc.);
-# relax nounset just for the source then re-enable.
-set +u
-source /opt/ros/humble/setup.bash
-source /root/skybeta_ws/install/local_setup.bash
-set -u
+# Flight-critical path: the skybeta underlay only, never the team overlay, so a
+# team package shadowing an underlay one cannot reach the VIO -> FC pipeline.
+# skybeta_env.sh handles the nounset dance the ROS setup scripts need.
+SKYBETA_UNDERLAY_ONLY=1
+# shellcheck source=container_scripts/skybeta_env.sh
+source skybeta_env.sh
 
 echo "[bridge] ros2 launch oakd_vslam_bringup px4_bridge.launch.py"
 exec ros2 launch oakd_vslam_bringup px4_bridge.launch.py

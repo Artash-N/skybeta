@@ -41,6 +41,8 @@
 #          e.g. SENS_DPRES_OFF
 #      3 x  one-shot 'calibrate on next boot' triggers, not configuration
 #          e.g. SYS_CAL_ACCEL, SYS_CAL_BARO, SYS_CAL_GYRO
+#      1 x  DDS domain must be UNIQUE per airframe on a shared network; equals ROS_DOMAIN_ID in that drone's /etc/skybeta/drone.env
+#          e.g. UXRCE_DDS_DOM_ID
 #      1 x  MAVProxy pseudo-parameters (e.g. _HASH_CHECK), not real PX4 parameters
 #          e.g. _HASH_CHECK
 #

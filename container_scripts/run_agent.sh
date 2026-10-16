@@ -11,7 +11,17 @@
 #   udp4               PX4 SITL / Isaac Sim profile: the sim's uxrce_dds_client
 #                      dials in over UDP. XRCE_UDP_PORT=8888.
 #
-# UXRCE_DDS_DOM_ID on the FC must equal ROS_DOMAIN_ID here (both default 0).
+# The agent does NOT read ROS_DOMAIN_ID: PX4's client tells it which domain to
+# create its participant in, from UXRCE_DDS_DOM_ID on the FC. That parameter must
+# therefore equal ROS_DOMAIN_ID here -- this drone's own domain (drone.env), not 0.
+# Which network interfaces the agent's participant uses is decided by the FC's
+# UXRCE_DDS_PTCFG, NOT by the default Fast DDS profile the ROS nodes use:
+#   0  PX4 sends its own participant XML; the agent builds it on every interface.
+#      In local scope the loopback-only ROS nodes then never discover it, so
+#      /fmu/* silently never reaches the bridge (measured on the bench).
+#   2  PX4 asks for the participant by reference ("px4_participant"); the agent
+#      builds it from XRCE_REFS (-r), which host/run.sh points at
+#      host/dds/agent_refs_<scope>.xml. This is the fleet setting.
 set -euo pipefail
 
 TRANSPORT="${XRCE_TRANSPORT:-serial}"
@@ -39,17 +49,32 @@ if [[ "${TRANSPORT}" == "serial" && ! -e "${DEV}" ]]; then
   exit 1
 fi
 
-# ROS 2 setup scripts touch unset vars (AMENT_TRACE_SETUP_FILES etc.);
-# relax nounset just for the source then re-enable.
-set +u
-source /opt/ros/humble/setup.bash
-source /root/skybeta_ws/install/local_setup.bash
-set -u
+# Flight-critical path: the skybeta underlay only, never the team overlay, so a
+# team package shadowing an underlay one cannot reach the VIO -> FC pipeline.
+# skybeta_env.sh handles the nounset dance the ROS setup scripts need.
+SKYBETA_UNDERLAY_ONLY=1
+# shellcheck source=container_scripts/skybeta_env.sh
+source skybeta_env.sh
 
-if [[ "${TRANSPORT}" == "udp4" ]]; then
-  echo "[agent] MicroXRCEAgent udp4 -p ${UDP_PORT}"
-  exec MicroXRCEAgent udp4 -p "${UDP_PORT}" "${VERB_ARG[@]}"
+REFS_ARG=()
+if [[ -n "${XRCE_REFS:-}" ]]; then
+  if [[ ! -r "${XRCE_REFS}" ]]; then
+    echo "error: XRCE_REFS=${XRCE_REFS} is not readable -- PX4's participant (UXRCE_DDS_PTCFG=2)" >&2
+    echo "       cannot be created without it. host/run.sh mounts host/dds/agent_refs_<scope>.xml." >&2
+    exit 1
+  fi
+  REFS_ARG=(-r "${XRCE_REFS}")
+else
+  echo "[agent] WARNING: no XRCE_REFS -- with UXRCE_DDS_PTCFG=2 on the FC, participant creation will fail." >&2
 fi
 
-echo "[agent] MicroXRCEAgent serial --dev ${DEV} -b ${BAUD}"
-exec MicroXRCEAgent serial --dev "${DEV}" -b "${BAUD}" "${VERB_ARG[@]}"
+echo "[agent] ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0} (FC UXRCE_DDS_DOM_ID must match), scope ${SKYBETA_DDS_SCOPE:-?}," \
+     "participant refs ${XRCE_REFS:-<none>} (FC UXRCE_DDS_PTCFG must be 2)"
+
+if [[ "${TRANSPORT}" == "udp4" ]]; then
+  echo "[agent] MicroXRCEAgent udp4 -p ${UDP_PORT} ${REFS_ARG[*]}"
+  exec MicroXRCEAgent udp4 -p "${UDP_PORT}" "${REFS_ARG[@]}" "${VERB_ARG[@]}"
+fi
+
+echo "[agent] MicroXRCEAgent serial --dev ${DEV} -b ${BAUD} ${REFS_ARG[*]}"
+exec MicroXRCEAgent serial --dev "${DEV}" -b "${BAUD}" "${REFS_ARG[@]}" "${VERB_ARG[@]}"

@@ -92,7 +92,16 @@ RUN rm -f /etc/apt/sources.list.d/kitware*.list \
 
 # 2. Python deps — depthai (host runtime) + MAVProxy (sanity test §3 of the
 #    setup doc).
-RUN pip3 install --no-cache-dir depthai MAVProxy
+#    Pinned to exactly what skybeta:0.1.0 resolved (`pip3 list` in that image).
+#    Unpinned, a rebuild on 2026-10-11 pulled numpy 2.2.6 (over the base's
+#    1.26.4, which ROS Humble's compiled Python modules are built against),
+#    opencv-python 5.0 and vtk via MAVProxy 1.8.75, and depthai 3.11 -- none of
+#    it ever run on the vehicle. The snapshot date pins apt; this pins pip.
+RUN pip3 install --no-cache-dir \
+        depthai==3.10.0 \
+        MAVProxy==1.8.74 \
+        pymavlink==2.4.49 \
+        "numpy<2"
 
 # 3. OAK-D udev rule baked in (also installed on the host by host/provision.sh).
 RUN echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"' \
@@ -146,9 +155,11 @@ COPY container_scripts/ /usr/local/bin/
 # in a confusing way.
 RUN chmod +x /usr/local/bin/*.sh
 
-# 7. Auto-source ROS + workspace for interactive shells.
-RUN echo 'source /opt/ros/humble/setup.bash'                       >> /root/.bashrc \
- && echo 'source /root/skybeta_ws/install/local_setup.bash'        >> /root/.bashrc
+# 7. Auto-source ROS + the skybeta underlay + the team overlay (/root/team_ws,
+#    bind-mounted from the host by host/run.sh) for interactive shells. One file,
+#    container_scripts/skybeta_env.sh, so shells and scripts cannot disagree.
+RUN echo 'source /usr/local/bin/skybeta_env.sh' >> /root/.bashrc \
+ && mkdir -p /root/team_ws/src
 
 # 8. Provenance, readable without a shell:
 #    docker inspect --format '{{json .Config.Labels}}' skybeta:<tag>

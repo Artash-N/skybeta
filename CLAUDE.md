@@ -10,16 +10,24 @@ canonical hardware/PX4 procedure; [`README.md`](README.md) for the container wor
 
 - **`host/`** does what a container can't: `provision.sh` (idempotent, resumable: prereqs →
   UART DMA patch → power mode → image pull), `doctor.sh` (unprivileged health check),
-  `run.sh stack|shell|bag|sim`, `build_image.sh` / `pull_image.sh` / `push_image.sh`,
+  `run.sh stack|shell|bag|build|sim`, `build_image.sh` / `pull_image.sh` / `push_image.sh`,
   `jetson_uart_dma_fix.sh`, `uart_loopback_test.py`. The old numbered scripts are gone.
+  Per-drone identity: `/etc/skybeta/drone.env` (template `drone.env.example`, parsed by
+  `drone_env.sh`). DDS isolation: `dds/fastdds_localhost.xml` (ROS nodes) and
+  `dds/agent_refs_{local,network}.xml` (the agent's PX4 participant, `UXRCE_DDS_PTCFG=2`).
 - **`docker/Dockerfile.jetson`** builds `skybeta:<VERSION>` on the NGC Isaac ROS Humble base
   (content-hash pinned, aarch64). `docker/Dockerfile.sim` is the x86 sim twin.
 - **`container_scripts/*.sh`** land on `$PATH` inside the image (`run_agent.sh`, `run_slam.sh`,
-  `run_bridge.sh`, `run_full_stack.sh`, `check_topics.sh`, `record_bag.sh`).
+  `run_bridge.sh`, `run_full_stack.sh`, `run_competitor.sh`, `check_topics.sh`, `record_bag.sh`,
+  `team_build.sh`, and `skybeta_env.sh`, which is sourced, not run).
+- **Team code lives outside the image**, in `$TEAM_WS` (default `~/team_ws`) on the host,
+  bind-mounted at `/root/team_ws` and built as an overlay on `/root/skybeta_ws`. The VIO -> FC
+  pipeline (agent, cuVSLAM, bridge) never sources that overlay.
 - **`src/`** — `oakd_vslam_bringup` (cuVSLAM launch + the PX4 odometry bridge),
   `skybeta_flight_interface` (the competitor-facing offboard wrapper: 10 Hz heartbeat, ENU↔NED,
   geofence, **no arm path**), `competitor_example` (Python reference mission),
-  `competitor_advanced_cpp` (px4_ros2_cpp custom mode). Competitors add packages here.
+  `competitor_advanced_cpp` (px4_ros2_cpp custom mode). Competitors add their own packages
+  in the team workspace, not here.
 - **`px4/`** — pinned v1.16.2 firmware + staged parameter files; **`tools/`** — `param_diff.py`,
   `latency_probe.py`; **`sim/`** — Isaac Sim + Pegasus profile; **`docs/`** — competitor, fleet,
   hardware and debugging guides.
@@ -74,6 +82,13 @@ Measured 2026-09-02 on the dev unit, not assumed:
   That one good run is proof the wiring, 921600 baud, `UXRCE_DDS_CFG=102` and the agent are
   all correct. Everything else was the connector losing contact.
 
+  **Same pattern again 2026-10-12** (cable still not replaced): 0 bytes at every baud rate ->
+  after a reseat, uXRCE framing (`7e 01 00 ...`) at 921600 and a full session with the 0.2.0
+  stack (24 datawriters, 27 datareaders, a replier) -> 0 bytes again after the stack was
+  restarted, PX4 never reconnected. That session also showed the FC is on
+  `UXRCE_DDS_DOM_ID=0`, `UXRCE_DDS_PTCFG=0` (agent participant multicasting on WiFi to
+  `239.255.0.1:7400`).
+
   **Consequences for debugging:** any *negative* UART result recorded while this connector is
   in place is uninformative — it tells you nothing about configuration. Positive results are
   still valid. Replace the JST-GH 1.25 mm 6-pin cable before trusting any further UART
@@ -98,6 +113,13 @@ print(len(b),'bytes'); print(bytes(b[:64]).hex(' '))"
 ```
 
 ## Flight controller — what the saved logs actually show
+
+**2026-10-15 dump** (`px4/params/fleet/SN0001-2026-10-15.params`): the FC runs **v1.16.1**
+(QGC header "1.16.1 rc", git `94cb2012` = tag `v1.16.1`), not v1.16.2 as stated elsewhere in
+this file. Same 1.16 message generation, so `px4_msgs @ release/1.16` still matches, but the
+fleet pins v1.16.2. Reflashing erases every parameter, so dump first. It also confirms the
+inference made from the agent's discovery traffic: `UXRCE_DDS_DOM_ID=0`, `UXRCE_DDS_PTCFG=0`.
+See `px4/params/README.md` for the rest of what it shows.
 
 `~/Downloads/mav.parm` (1129 params) and `~/Downloads/mav.tlog` (1.38 MB) are a MAVProxy
 capture from **2026-05-07 22:25:49–22:26:44** (55 s, 19918 messages: `ATTITUDE`,
@@ -293,9 +315,9 @@ Then `mavproxy.py --master=/dev/ttyTHS1,57600 --show-errors`.
 | `MAV_1_CONFIG` | `0` | Disabled — frees TELEM 2 |
 | `UXRCE_DDS_CFG` | `102` | TELEM 2 |
 | `SER_TEL2_BAUD` | `921600` | must match `run_agent.sh` / `XRCE_BAUD` |
-| `UXRCE_DDS_DOM_ID` | `0` | **must equal `ROS_DOMAIN_ID`** on the Jetson |
+| `UXRCE_DDS_DOM_ID` | this drone's ID | **must equal `ROS_DOMAIN_ID`** in `/etc/skybeta/drone.env`. Per airframe; set by hand, not in the 02 file |
 | `UXRCE_DDS_KEY` | non-zero | unique per client; default is fine |
-| `UXRCE_DDS_PTCFG` | `0` | default |
+| `UXRCE_DDS_PTCFG` | `2` | custom participant: the agent builds it from `host/dds/agent_refs_<scope>.xml`. **With `0`, the loopback-only stack never sees `/fmu/*`** (bench-measured) |
 
 Reboot the FC after either change — every param above is reboot-gated.
 
@@ -305,15 +327,16 @@ Reboot the FC after either change — every param above is reboot-gated.
 |---|---|---|---|
 | `EKF2_EV_CTRL` | `9` | **0** | bitmask: `0`=horiz pos, `1`=vert pos, `2`=3D velocity, `3`=yaw. 9 = horiz pos + yaw. Add bit 1 (→11) only once vision altitude is trusted |
 | `EKF2_EV_DELAY` | measured, ~50 | **0** | ms, range 0–300. Measure the real chain latency |
-| `EKF2_HGT_REF` | `0` (Baro) | **2** (Range) | values: `0`=Baro, `1`=GPS, `2`=Range, `3`=Vision. Default is 1 |
-| `EKF2_BARO_CTRL` | `1` | **0** | default is Enabled. `HGT_REF=0` with `BARO_CTRL=0` leaves **no height aiding** |
+| `EKF2_HGT_REF` | `2` (Range) | 2 (Range) | values: `0`=Baro, `1`=GPS, `2`=Range, `3`=Vision. Range is the fleet choice (03a, PX4 "Indoor (non-flat terrain)") |
+| `EKF2_BARO_CTRL` | `1` | **0** | default is Enabled. With baro off and GPS off, losing the range finder leaves **no height aiding** |
+| `EKF2_RNG_CTRL` | `1` (conditional) | 2 | course may have boxes/tables; `2` is PX4's flat-floor variant |
 | `EKF2_EV_NOISE_MD` | `0` | 0 | 0 = trust the variance in the message (params as lower bound); 1 = use params directly. **At 0 the bridge's swapped variances (bug #4) actually reach the estimator** |
 | `EKF2_EVP/EVV_NOISE` | `0.1` | 0.1 ✓ | — |
 | `EKF2_EVA_NOISE` | `0.05` | 0.1 | README asks for 0.05 |
 | `EKF2_EV_POS_X/Y/Z` | `0` | 0 ✓ | keep zero — the static TF carries the lever arm (bug #9) |
 
 Only once vision is trusted, retire the sensors it replaces: `EKF2_OF_CTRL = 0` (optical flow,
-currently `1`) and review `EKF2_RNG_CTRL` (currently `2`). Do not change these in the same
+currently `1`); the range finder stays as the height reference (03a). Do not change these in the same
 sitting as enabling EV — change one thing at a time or you cannot attribute the result.
 
 ## Flight symptoms → most likely causes
@@ -368,12 +391,22 @@ pass it** — the default is still zero.
 
 ### Upward drift
 
-**#1 suspect: the PX4 height reference, not the vision code.** The May dump has
-`EKF2_HGT_REF = 2` (Range), `EKF2_BARO_CTRL = 0` (baro fusion **off**), and
-`EKF2_RNG_A_HMAX = 5.0`. Above 5 m the rangefinder stops aiding, and with baro disabled there
-is **no height aiding left at all** — the altitude estimate free-runs, the controller reads it
+**#1 suspect: the PX4 height configuration, not the vision code.** The May dump has
+`EKF2_HGT_REF = 2` (Range), `EKF2_BARO_CTRL = 0` (baro fusion **off**), GPS off, and
+`EKF2_RNG_CTRL = 2`. Once the range finder stops delivering — above its range (the PX4 VL53L1X
+driver's maximum is **4 m**, less in bright light), over an obstacle, a rejected sample — there
+is **no other height source left**, so the altitude estimate free-runs, the controller reads it
 as sinking, and commands a climb that never terminates. That matches "drifts upward and then
 continues upward" precisely, including the fact that it *starts* fine.
+
+*Corrected 2026-10-15:* this entry (and `03a`) used to blame `EKF2_RNG_A_HMAX = 5.0`. The
+firmware's own parameter docs say that limit "only applies when conditional range aid mode is
+activated (EKF2_RNG_CTRL = 1)"; this airframe is on 2 (always). The conclusion stands, the
+mechanism was wrong. The root cause is baro being **off**, not the range finder being the
+reference: PX4 v1.16's documented "Indoor (flat terrain)" setup *is* range as the reference
+(`EKF2_HGT_REF=2`, `EKF2_RNG_CTRL=2`) **with** `EKF2_BARO_CTRL=1`, so the estimator "continues
+to estimate its height using the other sensors" when range drops out. That is what
+`px4/params/fleet/SN0001-fixes-2026-10-15.params` applies.
 
 Check `EKF2_HGT_REF`, `EKF2_BARO_CTRL` and `EKF2_RNG_CTRL` on the FC **before** touching the
 vision code. This is the cheapest fix on the list.
@@ -468,10 +501,58 @@ header stamps. This is the state a competitor forks.
 Not covered on the bench: `vo_state` under motion (camera was static), and everything
 downstream of the UART — the TELEM2 connector is still broken.
 
+## Fleet bench verification (2026-10-12, image `skybeta:0.2.0`, branch `fleet-ready`)
+
+Context: every team gets one drone, all drones share one WiFi network, and teams write code on
+the drone itself. Measured on the dev Orin (`wlP1p1s0`), not assumed.
+
+**DDS isolation**
+
+| Check | Result |
+|---|---|
+| RMW in the image | `rmw_fastrtps_cpp`, Fast DDS 2.6 |
+| MicroXRCEAgent's Fast DDS | its own **2.14.7** (`/usr/local/lib/libfastrtps.so.2.14.7`), separate from ROS's |
+| `fastdds_localhost.xml`, ros:humble container, 7 publishers + 2 echoes | all discovered; **0** UDP packets on eth0 (294 without the profile) |
+| same, but default `maxInitialPeersRange` (4) | only 4 of 7 topics discovered — loopback has no multicast, so the range is load-bearing |
+| full stack, local scope, domain 1 | 29 topics, cuVSLAM odometry 29.99–30.02 Hz, **0** DDS packets on WiFi in 30 s |
+| full stack, network scope (control) | 71 packets in 30 s, all to `239.255.0.1:7650` = 7400 + 250 x domain 1 |
+
+**The agent does not take the default profile.** An XRCE client compiled from the agent's own
+examples, sending PX4 v1.16.2's exact participant XML (quoted from
+`uxrce_dds_client.cpp`) to the real agent in the image, with the ROS side on
+`fastdds_localhost.xml`; discovery judged by a long-lived rclpy node (see gotchas):
+
+| FC `UXRCE_DDS_PTCFG` | ROS node discovers the agent's topic | DDS packets on WiFi |
+|---|---|---|
+| no profile anywhere (old behaviour) | yes | 31 |
+| 0, ROS on the localhost profile | **never** (15 s) | 15 |
+| 1 (PX4's localhost-only XML) | yes, 1.4 s | 0 |
+| 2 + `agent_refs_local.xml` | yes, 0.2 s (1.6 s inside the real `run.sh` stack) | 0 |
+| 2 + `agent_refs_network.xml`, ROS default transports | yes, 0.2 s | 20 (expected) |
+| 2, agent started without its refs file | fails loudly: `reference file ... does not exist` | — |
+
+The real PX4 then confirmed the `PTCFG=0` row: session up, its participant on WiFi, no `/fmu`
+data in domain 1 — see Hardware status.
+
+**Team workspace**: a package written on the host into `~/team_ws/src` built in the
+competitor window (7 s), launched, and published (received by an rclpy subscriber); `build/`,
+`install/` and `src/` owned by the host user; everything survived the container exiting. A
+team `px4_msgs` is flagged by `team_build.sh`; the VIO pipeline stays on the underlay.
+
+**Also run, all passing**: 121/121 unit tests in the image (`skybeta_flight_interface`,
+`oakd_vslam_bringup`), `param_diff --selftest` all six steps against the committed reference
+dump, `test_drone_env.sh` 30/30, `test_extlinux_fix.sh` 8/8 on the live `extlinux.conf`.
+
+**Not yet verified**: `/fmu` data arriving through the 0.2.0 stack with `UXRCE_DDS_PTCFG=2` on
+a real FC (the TELEM2 link dropped first); two drones on one access point.
+
 ## Known bugs
 
 **Status: #0–#9 are all FIXED as of 2026-09-03** (branch `competition-base`, verified — see the
-end-to-end bench section above). They are kept here because the *diagnosis* is the valuable part:
+end-to-end bench section above). **#10–#14 are FIXED on branch `fleet-ready` as of
+2026-10-12** (image `skybeta:0.2.0`, see the fleet bench section above); #13 additionally
+needs `UXRCE_DDS_PTCFG=2` on every FC, which has not yet been carried through a real
+`/fmu` data run. They are kept here because the *diagnosis* is the valuable part:
 each one records how the symptom presented and what the evidence was, so a regression is
 recognisable. Anything still open is called out explicitly in its own entry.
 
@@ -543,6 +624,13 @@ remainder, and idempotency across two passes — run against this host's real 4-
 
 **Note:** this host's `/boot/extlinux/extlinux.conf` still physically has the four lines.
 Collapsing them needs root, so `provision.sh` does it; it is harmless (all four paths identical).
+
+**Follow-up 2026-10-12 — that claim was wrong.** `already_applied()` only required *a* matching
+`FDT` line, so on a live-patched unit `apply` (and therefore `provision.sh`) reported "nothing to
+do" and never collapsed the duplicates; a `sudo ... apply` + reboot on the bench left all four.
+`apply` now notices the duplicates and rewrites `extlinux.conf` only (timestamped backup, DTB
+untouched, no reboot needed). Verified unprivileged: plain `apply` now stops at "Run as root"
+instead of "nothing to do", and `--dry-run` removes exactly the three extra lines.
 
 ### 3. FIXED — duplicate YAML keys dropped the resolution; but 1280×800 does **not** fit
 
@@ -732,6 +820,47 @@ hid a real hazard: setting `EKF2_EV_POS_*` on the FC *and* leaving the static TF
 `host/run.sh stack <x> <y> <z> [roll pitch yaw]`; `px4/params/03b_ekf2_vision.params` pins
 `EKF2_EV_POS_X/Y/Z` to `0` and says why.
 
+### 10. FIXED — every drone's DDS met every other drone's on a shared network
+
+`host/run.sh` runs every container `--network host` and set no domain or transport, so all
+drones' ROS nodes and agents shared domain 0 on the WiFi: drone A's `/fmu/in/*` setpoints
+were visible to drone B's agent, and the 30 Hz stereo topics went out as multicast. Fixed by a
+per-drone `ROS_DOMAIN_ID` (`/etc/skybeta/drone.env`, matched by `UXRCE_DDS_DOM_ID` on the FC,
+now a per-unit exclusion in `param_diff`) and `SKYBETA_DDS_SCOPE=local` by default. See #13
+for the part of this that did not work first time.
+
+### 11. FIXED — team code vanished when the container exited
+
+Every container is `--rm`, and the competitor guide said to `colcon build` inside it. Code,
+build output and any `apt`/`pip` installs were lost on exit. Team code now lives in
+`$TEAM_WS` on the host (mounted at `/root/team_ws`, built by `team_build.sh`, chowned back to
+the host user); extra packages go in `$TEAM_WS/Dockerfile` (`host/run.sh build`).
+
+### 12. FIXED — the image's pip packages were unpinned
+
+`pip3 install depthai MAVProxy`. A rebuild for 0.2.0 resolved numpy 2.2.6 over the base's
+1.26.4, opencv-python 5.0 and vtk (via MAVProxy 1.8.75), and depthai 3.11 — none of it ever run
+on the vehicle. Pinned to what 0.1.0 shipped (`pip3 list` in that image): depthai 3.10.0,
+MAVProxy 1.8.74, pymavlink 2.4.49, `numpy<2`.
+
+### 13. FIXED (needs `UXRCE_DDS_PTCFG=2` on each FC) — the agent ignored the localhost profile
+
+The first fix for #10 mounted `fastdds_localhost.xml` as the *default* profile, on the
+assumption that it reaches MicroXRCEAgent too. It does not: with `UXRCE_DDS_PTCFG=0` PX4 sends
+its own participant XML and the agent builds exactly that, on every interface. Worse, the ROS
+nodes, now loopback-only, never discover it — so in local scope `/fmu/*` would silently never
+reach the bridge. It only looked healthy on the bench because TELEM2 was dead. Measured
+(table above), then seen on the real PX4. Fixed by `UXRCE_DDS_PTCFG=2` (in
+`02_telem2_uxrce_dds.params`): PX4 asks for the participant by the reference
+`px4_participant`, which the agent builds from `host/dds/agent_refs_<scope>.xml` passed as
+`-r`. PTCFG=2 over 1 so that the scope switch in `drone.env` moves the agent too.
+
+### 14. FIXED — `COMPETITOR_PKG` / `COMPETITOR_LAUNCH` never reached the container
+
+The competitor guide documented `COMPETITOR_PKG=my_team_nav host/run.sh stack`, but `run.sh`
+never passed either variable into `docker run`, so the stack always launched
+`competitor_example`. Now forwarded (and settable in `drone.env`).
+
 ## Gotchas when working here
 
 - The image is **aarch64-only** — the NGC Isaac ROS base publishes no amd64 manifest.
@@ -749,6 +878,18 @@ hid a real hazard: setting `EKF2_EV_POS_*` on the FC *and* leaving the static TF
 - `px4_msgs` (`release/1.16`) and `px4-ros2-interface-lib` (`release/1.16`) are cloned at build
   time; their resolved SHAs are baked into the image at `/root/skybeta_ws/*.sha` so a drifted
   rebuild is detectable.
+- **Test DDS discovery with a long-lived node, not `ros2 topic list --no-daemon`.** With
+  loopback-only transports, discovery is unicast and slower than the CLI's brief wait; the CLI
+  reported "not found" for an agent participant that a 15 s rclpy node found in 0.2 s.
+- **Never put `--` inside an XML comment in `host/dds/`.** It makes the file malformed, and Fast
+  DDS then silently ignores the profile and falls back to every interface. Done twice in one
+  session; `run.sh` and `test_drone_env.sh` now refuse a profile that does not parse.
+- **Prove isolation with a packet capture**, e.g. `tcpdump -ni wlP1p1s0 'udp portrange
+  7400-7700'` from `docker run --rm --network host alpine` (no sudo needed), and always run the
+  `network`-scope control so you know the capture can see a leak.
+- `host/run.sh stack` needs a TTY (`docker run -it`). Headless, e.g. over SSH from a script:
+  `sleep infinity | script -qfc "host/run.sh stack" stack.log`. And never `pkill -f` a pattern
+  that also appears in your own SSH command line — it kills the session.
 - Editing `container_scripts/` rebuilds only the last layers (~1 s); editing anything under
   `src/` re-runs colcon for all four packages (~10 min on Orin Nano). `.dockerignore` keeps
   local `build/`/`install/`/`log/` and recorded bags out of the context so they don't bust that

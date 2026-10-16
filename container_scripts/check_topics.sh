@@ -12,12 +12,10 @@ set -euo pipefail
 
 TIMEOUT_S="${CHECK_TIMEOUT_S:-10}"
 
-# ROS 2 setup scripts touch unset vars (AMENT_TRACE_SETUP_FILES etc.);
-# relax nounset just for the source then re-enable.
-set +u
-source /opt/ros/humble/setup.bash
-source /root/skybeta_ws/install/local_setup.bash
-set -u
+# ROS + skybeta underlay + the team overlay (if built), so team-defined message
+# types resolve. skybeta_env.sh handles the nounset dance the ROS setup scripts need.
+# shellcheck source=container_scripts/skybeta_env.sh
+source skybeta_env.sh
 
 TOPICS="$(ros2 topic list 2>/dev/null || true)"
 FMU_OUT="$(printf '%s\n' "${TOPICS}" | grep '^/fmu/out/' || true)"
@@ -72,12 +70,15 @@ if [[ ${fails} -eq 0 ]]; then
   exit 0
 fi
 
-cat >&2 <<'EOM'
+cat >&2 <<EOM
 [check] FAIL -- the link is not carrying data.
 
   1. Is run_agent.sh running, and did it print a session/client id?
   2. FC params: UXRCE_DDS_CFG=102, MAV_1_CONFIG=0, SER_TEL2_BAUD=921600,
-     UXRCE_DDS_DOM_ID == ROS_DOMAIN_ID here. Reboot the FC after changing them.
+     UXRCE_DDS_DOM_ID == ${ROS_DOMAIN_ID:-0} (ROS_DOMAIN_ID here, from drone.env).
+     UXRCE_DDS_PTCFG == 2. Reboot the FC after changing them. A domain mismatch,
+     or PTCFG=0 in local DDS scope, looks exactly like a dead link: the agent
+     connects, and its topics land where nothing in this container can see them.
   3. The TELEM2 JST-GH connector on the dev unit is physically damaged
      (CLAUDE.md) -- a negative result here proves nothing until it is replaced.
   4. Topics present but silent => px4_msgs generation vs firmware mismatch

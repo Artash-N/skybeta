@@ -42,7 +42,10 @@ What apply does:
 Idempotency:
   - apply is a no-op (exit 0) when the patch is already live: the running device
     tree carries serial@3100000/iommus, $PATCHED_DTB exists, and extlinux.conf
-    already points at it. Use --force to rewrite anyway.
+    has exactly one FDT line, pointing at it. Use --force to rewrite anyway.
+  - If the patch is live but extlinux.conf has duplicate FDT lines (left by old
+    versions of this script), apply rewrites extlinux.conf only -- backup first,
+    DTB untouched, no reboot needed.
   - The extlinux rewrite deletes every FDT line inside "LABEL primary" and then
     inserts exactly one immediately after LINUX, so repeated runs cannot stack
     duplicate FDT entries.
@@ -444,8 +447,27 @@ apply_fix() {
   # Cheapest exit first: if the patch is already live there is nothing to do,
   # and detecting that needs no privileges.
   if [[ "$force" -ne 1 ]] && already_applied; then
-    log "already applied -- serial@3100000 has iommus in the live DT, $PATCHED_DTB exists,"
-    log "and $EXTLINUX points at it. Nothing to do (pass --force to rewrite anyway)."
+    local n_fdt
+    n_fdt="$(grep -cE '^[[:space:]]*FDT[[:space:]]' "$EXTLINUX")"
+    if [[ "$n_fdt" -eq 1 ]]; then
+      log "already applied -- serial@3100000 has iommus in the live DT, $PATCHED_DTB exists,"
+      log "and $EXTLINUX points at it. Nothing to do (pass --force to rewrite anyway)."
+      return 0
+    fi
+    # The patch is live, but older runs of this script left duplicate FDT lines
+    # (bug #2). Before 2026-10-12 this branch returned "nothing to do", so plain
+    # `apply` could never clean them up. Repair extlinux.conf ONLY: rebuilding
+    # the DTB from the live tree is unnecessary risk when the booted DTB is
+    # already the patched one. Every FDT line points at that same file, so the
+    # running system is unchanged and no reboot is needed.
+    need_root
+    local bak
+    bak="${EXTLINUX}.bak-$(date +%Y%m%d-%H%M%S)"
+    cp "$EXTLINUX" "$bak"
+    log "patch already live; $EXTLINUX has $n_fdt FDT lines -- rewriting it to exactly one."
+    log "backup: $bak"
+    rewrite_extlinux_file "$EXTLINUX" "$PATCHED_DTB"
+    log "FDT lines now: $(grep -cE '^[[:space:]]*FDT[[:space:]]' "$EXTLINUX"). DTB untouched; no reboot needed."
     return 0
   fi
 

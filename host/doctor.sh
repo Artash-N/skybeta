@@ -10,6 +10,9 @@
 #   host/doctor.sh                 # all checks except the camera boot
 #   host/doctor.sh --boot-camera   # also start a container and open the OAK-D
 #   host/doctor.sh --no-uart       # skip the 3 s serial sniff
+#   host/doctor.sh --json          # one JSON object on stdout instead of the table
+#                                  # (schema 1: date host image version args checks[]
+#                                  #  {name result detail} pass warn fail ok)
 #
 # Exit status: 0 if no check FAILed (WARNs do not fail), 1 otherwise.
 set -uo pipefail
@@ -26,22 +29,43 @@ IMAGE="${IMAGE:-skybeta:${TAG}}"
 
 BOOT_CAMERA=0
 DO_UART=1
+JSON=0
 for arg in "$@"; do
   case "${arg}" in
     --boot-camera) BOOT_CAMERA=1 ;;
     --no-uart)     DO_UART=0 ;;
-    -h|--help)     sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --json)        JSON=1 ;;
+    -h|--help)     sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown flag: ${arg}" >&2; exit 2 ;;
   esac
 done
 
 n_pass=0; n_warn=0; n_fail=0
-pass() { printf '  \033[32mPASS\033[0m  %-26s %s\n' "$1" "${2-}"; n_pass=$((n_pass+1)); }
-warn() { printf '  \033[33mWARN\033[0m  %-26s %s\n' "$1" "${2-}"; n_warn=$((n_warn+1)); }
-fail() { printf '  \033[31mFAIL\033[0m  %-26s %s\n' "$1" "${2-}"; n_fail=$((n_fail+1)); }
+C_NAME=(); C_RES=(); C_DET=()
+record() { C_RES+=("$1"); C_NAME+=("$2"); C_DET+=("${3-}"); }
+show() { [[ "${JSON}" -eq 1 ]] || printf "  \033[$1m%s\033[0m  %-26s %s\n" "$2" "$3" "${4-}"; }
+pass() { record PASS "$@"; n_pass=$((n_pass+1)); show 32 PASS "$@"; }
+warn() { record WARN "$@"; n_warn=$((n_warn+1)); show 33 WARN "$@"; }
+fail() { record FAIL "$@"; n_fail=$((n_fail+1)); show 31 FAIL "$@"; }
 
-echo "skybeta doctor -- $(date -Is)  host=$(hostname)  image=${IMAGE}"
-echo
+# A JSON string literal. C0 control characters other than \t \n \r are dropped.
+json_str() {
+  local s
+  s="$(printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037')"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  printf '"%s"' "${s}"
+}
+
+RUN_DATE="$(date -Is)"
+RUN_ARGS=("$@")
+if [[ "${JSON}" -eq 0 ]]; then
+  echo "skybeta doctor -- ${RUN_DATE}  host=$(hostname)  image=${IMAGE}"
+  echo
+fi
 
 # 1 -- L4T release --------------------------------------------------------
 REL_FILE=/etc/nv_tegra_release
@@ -100,7 +124,7 @@ else
   elif [[ "${n_fdt}" -eq 0 ]]; then
     warn "extlinux-fdt" "no FDT line -- booting the stock DTB, not ${fdt_val:-the patched one}"
   else
-    warn "extlinux-fdt" "${n_fdt} duplicate FDT lines (bug #2) -- run: host/jetson_uart_dma_fix.sh apply --dry-run"
+    warn "extlinux-fdt" "${n_fdt} duplicate FDT lines (bug #2) -- fix: sudo host/jetson_uart_dma_fix.sh apply  (rewrites extlinux.conf only, no reboot; preview with --dry-run)"
   fi
 fi
 
@@ -240,8 +264,79 @@ else
   fi
 fi
 
+# 11 -- per-drone identity: /etc/skybeta/drone.env ---------------------------
+# Without it every drone sits on DDS domain 0, and on a shared network every
+# agent can see every other drone's /fmu/in/* setpoints.
+# shellcheck source=host/drone_env.sh
+source "${HERE}/drone_env.sh"
+skybeta_load_drone_env
+ID_FILE="${SKYBETA_DRONE_ENV:-/etc/skybeta/drone.env}"
+scope="${SKYBETA_DDS_SCOPE:-local}"
+if [[ -z "${SKYBETA_DRONE_ENV_FILE}" ]]; then
+  warn "drone-identity" "no ${ID_FILE} -- anonymous drone on domain ${ROS_DOMAIN_ID:-0}. Fine alone on a bench; required before a second drone joins the network (host/drone.env.example)"
+elif ! derr="$(skybeta_check_domain)"; then
+  fail "drone-identity" "${ID_FILE}: ${derr}"
+elif [[ "${scope}" != "local" && "${scope}" != "network" ]]; then
+  fail "drone-identity" "${ID_FILE}: SKYBETA_DDS_SCOPE='${scope}' -- expected local or network"
+elif [[ "${ROS_DOMAIN_ID:-0}" == "0" ]]; then
+  warn "drone-identity" "drone ${DRONE_ID:-?} is on ROS_DOMAIN_ID 0, the shared default. Set ROS_DOMAIN_ID=${DRONE_ID:-<n>} in ${ID_FILE} and UXRCE_DDS_DOM_ID to match on the FC"
+else
+  id_msg="drone ${DRONE_ID:-?} team ${TEAM:-?} domain ${ROS_DOMAIN_ID} DDS ${scope} -- FC UXRCE_DDS_DOM_ID must be ${ROS_DOMAIN_ID}"
+  [[ -n "${SKYBETA_DRONE_ENV_IGNORED}" ]] && id_msg+="; ignored unknown keys: ${SKYBETA_DRONE_ENV_IGNORED}"
+  if [[ "${scope}" == "network" ]]; then
+    warn "drone-identity" "${id_msg}. Scope 'network' puts the camera streams on the WiFi -- debugging only"
+  else
+    pass "drone-identity" "${id_msg}"
+  fi
+fi
+
+# 12 -- team workspace ---------------------------------------------------------
+TEAM_WS="${TEAM_WS:-${HOME}/team_ws}"
+if [[ ! -d "${TEAM_WS}" ]]; then
+  warn "team-ws" "${TEAM_WS} does not exist yet (host/run.sh creates it on first start)"
+else
+  n_pkg="$(find "${TEAM_WS}/src" -name package.xml 2>/dev/null | wc -l | tr -d ' ')"
+  overlay="not built"
+  [[ -f "${TEAM_WS}/install/local_setup.bash" ]] && overlay="built"
+  # The container runs as root; anything it created that team_build.sh has not
+  # chowned back is uneditable from the host shell.
+  foreign="$(find "${TEAM_WS}" ! -user "$(id -u)" -print -quit 2>/dev/null)"
+  team_img=""
+  if [[ -f "${TEAM_WS}/Dockerfile" ]]; then
+    if docker image inspect "skybeta-team:${TAG}" >/dev/null 2>&1; then
+      team_img=", team image skybeta-team:${TAG}"
+    else
+      team_img=", team image NOT built for ${TAG} (host/run.sh build)"
+    fi
+  fi
+  if [[ -n "${foreign}" ]]; then
+    warn "team-ws" "${TEAM_WS} has files not owned by $(id -un), e.g. ${foreign#"${TEAM_WS}/"} -- created as root in a container. Fix: sudo chown -R $(id -un): ${TEAM_WS}"
+  elif [[ "${team_img}" == *"NOT built"* ]]; then
+    warn "team-ws" "${TEAM_WS}: ${n_pkg} package(s), overlay ${overlay}${team_img}"
+  else
+    pass "team-ws" "${TEAM_WS}: ${n_pkg} package(s), overlay ${overlay}${team_img}"
+  fi
+fi
+
 # --------------------------------------------------------------------------
-echo
-printf 'doctor: %d PASS  %d WARN  %d FAIL\n' "${n_pass}" "${n_warn}" "${n_fail}"
+if [[ "${JSON}" -eq 1 ]]; then
+  args_json=""
+  for a in ${RUN_ARGS[@]+"${RUN_ARGS[@]}"}; do
+    args_json+="${args_json:+,}$(json_str "${a}")"
+  done
+  checks_json=""
+  for i in "${!C_NAME[@]}"; do
+    checks_json+="${checks_json:+,}"$'\n  '
+    checks_json+="{\"name\":$(json_str "${C_NAME[$i]}"),\"result\":\"${C_RES[$i]}\",\"detail\":$(json_str "${C_DET[$i]}")}"
+  done
+  ok=true; [[ "${n_fail}" -eq 0 ]] || ok=false
+  printf '{"schema":1,"date":%s,"host":%s,"image":%s,"version":%s,"args":[%s],\n"checks":[%s\n],\n"pass":%d,"warn":%d,"fail":%d,"ok":%s}\n' \
+    "$(json_str "${RUN_DATE}")" "$(json_str "$(hostname)")" "$(json_str "${IMAGE}")" \
+    "$(json_str "${TAG}")" "${args_json}" "${checks_json}" \
+    "${n_pass}" "${n_warn}" "${n_fail}" "${ok}"
+else
+  echo
+  printf 'doctor: %d PASS  %d WARN  %d FAIL\n' "${n_pass}" "${n_warn}" "${n_fail}"
+fi
 [[ "${n_fail}" -eq 0 ]] || exit 1
 exit 0

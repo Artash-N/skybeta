@@ -109,8 +109,16 @@ decoration.
 
 If the echo hangs while the list looks healthy:
 
-- `UXRCE_DDS_DOM_ID` on the FC must equal `ROS_DOMAIN_ID` in the container (both 0 by
-  default).
+- `UXRCE_DDS_DOM_ID` on the FC must equal `ROS_DOMAIN_ID` in the container. That is this
+  drone's own domain from `/etc/skybeta/drone.env`, not 0; `host/run.sh stack` prints it. The
+  agent creates its participant in whatever domain the FC asks for, so a mismatch connects
+  cleanly and puts every `/fmu` topic where nothing is listening.
+- `UXRCE_DDS_PTCFG` on the FC must be `2`. With `0` the agent builds PX4's participant on every
+  interface while the stack's ROS nodes sit on loopback; they never discover each other, and it
+  looks exactly like a dead link. `run_agent.sh` prints the refs file it was given.
+- Anything outside the container (a laptop, a second container started by hand) only sees the
+  drone with `SKYBETA_DDS_SCOPE=network` **and** the same `ROS_DOMAIN_ID`. The default `local`
+  scope keeps DDS on loopback + shared memory.
 - `px4_msgs` must match the firmware generation. The image pins `release/1.16` and the
   installed `VehicleOdometry.msg` carries `MESSAGE_VERSION`; that field's presence is the
   quick proof you are not on a 1.14 build.
@@ -329,15 +337,17 @@ A constant offset equal to the startup heading means startup-aligned, i.e. FRD.
 | 3 | No reset handling on tracking loss | `/visual_slam/status` vs `reset_counter` |
 
 **#1 is the cheapest fix on the list and the one to try first.** The May dump has
-`EKF2_HGT_REF = 2` (Range), `EKF2_BARO_CTRL = 0` (baro fusion **off**), and
-`EKF2_RNG_A_HMAX = 5.0`. Above 5 m the rangefinder stops aiding; with baro disabled and
-**GPS unavailable**, there is then no height aiding left at all. The altitude estimate
+`EKF2_HGT_REF = 2` (Range), `EKF2_BARO_CTRL = 0` (baro fusion **off**), and GPS off.
+Whenever the range finder stops delivering (above its 4 m maximum, over an obstacle, a
+rejected sample) there is then no height source left at all. The altitude estimate
 free-runs, the controller reads it as sinking, and commands a climb that never
-terminates — including the detail that it *starts* fine.
+terminates — including the detail that it *starts* fine. (`EKF2_RNG_A_HMAX` only matters in
+conditional mode; that airframe was on `EKF2_RNG_CTRL = 2`.)
 
 Caveat, and it matters: outdoors with `EKF2_GPS_CTRL = 7` the GPS still provides height,
 so this failure mode is specific to the GPS-denied case. `px4/params/03a_height_reference.params`
-restores baro height aiding, depends on nothing else in the stack, and can be loaded today.
+keeps the range finder as the reference and puts the barometer back behind it (PX4's
+"Indoor (non-flat terrain)" configuration); it depends on nothing else in the stack.
 
 **#2**: vertical is the weakest axis for pure stereo VO, and `enable_imu_fusion` is off,
 so there is no inertial or gravity constraint at all. Keep `EKF2_EV_CTRL` bit 1 off until

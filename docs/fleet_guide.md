@@ -91,7 +91,7 @@ Two halves, and the order between them matters.
 [`../px4/params/00_baseline.params`](../px4/params/00_baseline.params), then **reboot the
 FC**.
 
-927 parameters: the airframe (`SYS_AUTOSTART = 4001`, generic quadcopter), the controller
+924 parameters: the airframe (`SYS_AUTOSTART = 4001`, generic quadcopter), the controller
 gains, the battery configuration, the failsafes, the logging profile — everything that
 should be byte-identical across the fleet. It was generated from a dump of the reference
 airframe with every per-unit value stripped out; the header of the file lists exactly what
@@ -140,9 +140,9 @@ tools/param_diff.py --dump px4/params/fleet/<serial>.params --no-staged
 ```
 
 ```
-  expected  px4/params/00_baseline.params                  927 params
+  expected  px4/params/00_baseline.params                  924 params
   actual    px4/params/fleet/<serial>.params              1129 params
-  merged expected set: 927 params
+  merged expected set: 924 params
 
 OK -- no drift. Every expected parameter matches.
 ```
@@ -172,6 +172,25 @@ Five phases, recorded one per line in `$HOME/.skybeta/state`:
 | `power` | yes | `nvpmodel` to the MAXN model (resolved by name — on the Orin Nano Super that is ID 2, not 0) + `jetson_clocks`, made to survive reboot |
 | `pull` | no | pulls the image at the tag in `VERSION`. Needs `REGISTRY` set |
 | `doctor` | no | the health check |
+
+### Give the drone its identity
+
+Every Jetson carries `/etc/skybeta/drone.env`: drone number, team, **DDS domain**, camera
+mount and the team workspace. It is what turns ten identical images into ten separate drones
+on one network. Start from the template:
+
+```bash
+sudo install -D -m 0644 host/drone.env.example /etc/skybeta/drone.env
+sudoedit /etc/skybeta/drone.env        # DRONE_ID=3, ROS_DOMAIN_ID=3, TEAM=..., CAMERA_*
+```
+
+`ROS_DOMAIN_ID` = the drone number, unique across the fleet, 1–99. Step 5 sets the FC's
+`UXRCE_DDS_DOM_ID` to the same number. Leave `SKYBETA_DDS_SCOPE=local`: DDS then stays on the
+Jetson (loopback + shared memory) and nothing — not even the 30 Hz camera streams — goes over
+the WiFi. Flip it to `network` only to debug from a laptop on the same domain.
+
+`host/run.sh` reads this file on every start and prints the drone, domain and scope in its
+banner; without it, it warns and runs as an anonymous drone on domain 0.
 
 ### The reboot, and resuming
 
@@ -227,11 +246,11 @@ host/doctor.sh
 echo "doctor exit: $?"
 ```
 
-Ten checks, `PASS`/`WARN`/`FAIL` one line each, exit 1 if anything FAILed: L4T release ·
+Twelve checks, `PASS`/`WARN`/`FAIL` one line each, exit 1 if anything FAILed: L4T release ·
 UARTA `iommus`/`dmas` in the live device tree · `3100000.serial` bound to `serial-tegra`
 owning `ttyTHS1` · exactly one `FDT` line in `extlinux.conf` · `dialout` + `docker`
 membership · docker `nvidia` runtime · OAK-D enumerated · UART traffic · image present ·
-power model.
+power model · drone identity (`drone.env`, DDS domain) · team workspace.
 
 Two expected non-failures at this point in the guide:
 
@@ -300,7 +319,16 @@ then **reboot the FC**.
 
 This hands TELEM2 from MAVLink to the uXRCE-DDS client at 921600. **MAVProxy will stop
 working on this port — that is the expected outcome, not a regression.**
-`UXRCE_DDS_DOM_ID` must equal `ROS_DOMAIN_ID` on the Jetson; both default to 0.
+The file also sets **`UXRCE_DDS_PTCFG = 2`**: PX4 asks the agent for its DDS participant by
+reference, and the agent builds it on loopback from `host/dds/agent_refs_local.xml`. Leave it
+at 0 and the stack connects, the agent reports a session, and not one `/fmu` message reaches
+the bridge — the ROS nodes are on loopback and the agent's participant is not.
+
+**Then set `UXRCE_DDS_DOM_ID` by hand** to this drone's `ROS_DOMAIN_ID` — the value in its
+`/etc/skybeta/drone.env` (convention: the drone number) — and reboot the FC again. It is
+deliberately not in the 02 file: it is the one DDS setting that must *differ* between drones.
+Leave ten drones on domain 0 and every agent on the WiFi can see every other drone's
+`/fmu/in/*` setpoints.
 
 ```bash
 host/run.sh stack        # tmux windows: agent, slam, bridge, competitor
@@ -352,6 +380,29 @@ check_topics.sh
 > spelled `/fmu/out/vehicle_status_v1`. Nothing in the stack hard-codes either spelling;
 > `check_topics.sh` and `skybeta_flight_interface/topics.py` both resolve it at runtime.
 
+### Verify — and prove nothing reaches the WiFi
+
+Data echoing is half the pass. The other half, for a drone that will share a network, is that
+none of its DDS traffic goes over the air. From the Jetson, with the stack running (no sudo
+needed — the capture runs in a throwaway container):
+
+```bash
+docker run --rm --network host alpine sh -c "apk add -q tcpdump && \
+  timeout 30 tcpdump -ni <wifi-iface> 'udp portrange 7400-7700' | wc -l"
+```
+
+```
+0
+```
+
+Zero packets in 30 s is the pass (bench: 0 with the full stack up). Then run the control once:
+set `SKYBETA_DDS_SCOPE=network`, restart the stack, repeat — you must now see packets (bench:
+71), or the capture is not looking at the right interface. Set the scope back to `local`.
+
+If the echo passes but packets appear in local scope, the agent's participant is on the
+network: `UXRCE_DDS_PTCFG` is not 2. If the echo *fails* in local scope but passes with
+`SKYBETA_DDS_SCOPE=network`, it is the same cause seen from the other side.
+
 If the list is healthy but the echo hangs: check `ROS_DOMAIN_ID` against
 `UXRCE_DDS_DOM_ID`, then `uxrce_dds_client status` on the FC, then that the installed
 `VehicleOdometry.msg` carries `MESSAGE_VERSION` (the quick proof you are on the 1.16
@@ -368,17 +419,28 @@ it and re-run. A *negative* UART result on a suspect connector is not a result.
 [`../px4/params/03a_height_reference.params`](../px4/params/03a_height_reference.params),
 then **reboot the FC**.
 
-Two parameters: `EKF2_HGT_REF = 0` (Baro) and `EKF2_BARO_CTRL = 1` (baro fusion on).
+Five parameters, PX4 v1.16's documented **"Indoor (non-flat terrain)"** height configuration:
+the range finder is the reference, the barometer is the backup.
+
+| Parameter | Value | |
+|---|---|---|
+| `EKF2_HGT_REF` | `2` (range) | trust the range finder (ST VL53L1X) |
+| `EKF2_BARO_CTRL` | `1` | baro takes over whenever range is not fused |
+| `EKF2_RNG_CTRL` | `1` (conditional) | range only below 1 m/s and below `EKF2_RNG_A_HMAX`, with a height-above-ground consistency gate, so boxes and tables do not drag the height around. `2` (always) is PX4's flat-floor variant |
+| `EKF2_RNG_A_HMAX` | `3.0` m | inside the VL53L1X driver's 4 m maximum |
+| `EKF2_GPS_CTRL` | `0` | indoor |
+
+Set each drone's ceiling to match: `GF_MAX_VER_DIST` (e.g. 3 m), in its fixes file.
 
 This step depends on nothing else in the stack — not vision, not the UART, not the
 container — so it can be done at any point after step 2. It is here because it is the
 runaway-climb fix, and you want it in before anything hovers.
 
-The state it corrects: the reference airframe shipped with `EKF2_HGT_REF = 2` (Range),
-`EKF2_BARO_CTRL = 0`, and `EKF2_RNG_A_HMAX = 5.0`. Above 5 m the rangefinder stops aiding;
-with baro off and GPS unavailable, there is then **no height aiding at all**. The altitude
-estimate free-runs, the controller reads it as sinking, and commands a climb that never
-terminates.
+The state it corrects: the reference airframe shipped with `EKF2_HGT_REF = 2` (Range) but
+`EKF2_BARO_CTRL = 0` and GPS off. Whenever the range finder stopped delivering (above its
+range, over an obstacle, a rejected sample) there was **no height source left**: the
+estimate free-ran, the controller read it as sinking, and commanded a climb that never
+terminated. Range as the reference was never the problem; having nothing behind it was.
 
 ### Verify — bench hover check
 
@@ -512,13 +574,13 @@ tools/param_diff.py --dump px4/params/fleet/<serial>.params
 ```
 
 ```
-  expected  px4/params/00_baseline.params                  927 params
+  expected  px4/params/00_baseline.params                  924 params
   expected  px4/params/01_telem2_mavlink.params              6 params
   expected  px4/params/02_telem2_uxrce_dds.params            6 params
-  expected  px4/params/03a_height_reference.params           2 params
-  expected  px4/params/03b_ekf2_vision.params               11 params
+  expected  px4/params/03a_height_reference.params           5 params
+  expected  px4/params/03b_ekf2_vision.params                9 params
   actual    px4/params/fleet/<serial>.params              1174 params
-  merged expected set: 947 params
+  merged expected set: 946 params
 
 OK -- no drift. Every expected parameter matches.
 ```
@@ -565,18 +627,18 @@ competition day.
 Keep one row per airframe. The columns are the ones that have actually distinguished two
 drones in practice.
 
-| Serial | Jetson hostname | FC firmware | Image tag | Image digest | Cal. date | `EKF2_EV_DELAY` (ms) | Camera x/y/z, r/p/y | TELEM2 cable | Last param_diff clean | Notes |
-|---|---|---|---|---|---|---|---|---|---|---|
-| `SN0001` | `skybeta-01` | v1.16.2 | `0.1.0` | `sha256:…` | 2026-09-03 | | | new 2026-09-03 | 2026-09-03 | reference airframe |
-| `SN0002` | `skybeta-02` | | | | | | | | | |
-| `SN0003` | `skybeta-03` | | | | | | | | | |
-| `SN0004` | `skybeta-04` | | | | | | | | | |
-| `SN0005` | `skybeta-05` | | | | | | | | | |
-| `SN0006` | `skybeta-06` | | | | | | | | | |
-| `SN0007` | `skybeta-07` | | | | | | | | | |
-| `SN0008` | `skybeta-08` | | | | | | | | | |
-| `SN0009` | `skybeta-09` | | | | | | | | | |
-| `SN0010` | `skybeta-10` | | | | | | | | | |
+| Serial | Jetson hostname | Domain ID | FC firmware | Image tag | Image digest | Cal. date | `EKF2_EV_DELAY` (ms) | Camera x/y/z, r/p/y | TELEM2 cable | Last param_diff clean | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `SN0001` | `skybeta-01` | 1 | v1.16.2 | `0.1.0` | `sha256:…` | 2026-09-03 | | | new 2026-09-03 | 2026-09-03 | reference airframe |
+| `SN0002` | `skybeta-02` | 2 | | | | | | | | | |
+| `SN0003` | `skybeta-03` | 3 | | | | | | | | | |
+| `SN0004` | `skybeta-04` | 4 | | | | | | | | | |
+| `SN0005` | `skybeta-05` | 5 | | | | | | | | | |
+| `SN0006` | `skybeta-06` | 6 | | | | | | | | | |
+| `SN0007` | `skybeta-07` | 7 | | | | | | | | | |
+| `SN0008` | `skybeta-08` | 8 | | | | | | | | | |
+| `SN0009` | `skybeta-09` | 9 | | | | | | | | | |
+| `SN0010` | `skybeta-10` | 10 | | | | | | | | | |
 
 Per-airframe physical details — OAK-D serial, IMU part, kill-switch channel, radio
 calibration date — go in the record card at the end of

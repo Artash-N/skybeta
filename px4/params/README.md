@@ -19,7 +19,7 @@ you can get back regardless.
 
 | File | Purpose | Load when | Needs the UART? |
 |---|---|---|---|
-| `03a_height_reference.params` | baro height aiding | **now** — fixes the runaway climb | no |
+| `03a_height_reference.params` | height: range finder reference, baro backup (PX4 "Indoor (non-flat terrain)") | **now** — fixes the runaway climb | no |
 | `01_telem2_mavlink.params` | TELEM2 → MAVLink | first — proves the UART wiring | — |
 | `02_telem2_uxrce_dds.params` | TELEM2 → uXRCE-DDS | after stage 1 gives a HEARTBEAT | yes |
 | `03b_ekf2_vision.params` | EV fusion | after stage 2 shows data **and** the `pose_frame` bug is fixed | yes |
@@ -58,6 +58,30 @@ Bench first, props off. Confirm `EKF2_EV_CTRL` is actually fusing before flying 
 `/fmu/out/estimator_status_flags` and check the vehicle's local position tracks the camera when
 you move the airframe by hand.
 
+## Recorded dumps: `fleet/`
+
+One file per airframe, as it is actually running (fleet guide step 8), diffed with
+`tools/param_diff.py --dump fleet/<serial>.params`.
+
+- **`fleet/SN0001-reference-2026-05-07.parm`** — MAVProxy dump of the reference airframe,
+  1129 parameters, captured 2026-05-07, before any staged file was loaded. `00_baseline.params`
+  is generated from it (`tools/param_diff.py --make-baseline`), and `--selftest` uses it to
+  prove the baseline round-trips. It predates `UXRCE_DDS_PTCFG` (absent) and was taken with
+  TELEM2 still on MAVLink. Do not overwrite it; record new dumps alongside it.
+- **`fleet/SN0001-2026-10-15.params`** — QGC dump of the same airframe as it actually ran on
+  2026-10-15: **firmware v1.16.1** (git `94cb2012` = tag `v1.16.1`), not the v1.16.2 the fleet
+  pins. `param_diff --dump` reports 28 changed parameters; the ones that matter:
+  `UXRCE_DDS_DOM_ID=0` and `UXRCE_DDS_PTCFG=0` (no `/fmu` data reaches the stack),
+  `EKF2_HGT_REF=0` with `EKF2_BARO_CTRL=0` and `EKF2_GPS_CTRL=0` (no height aiding once the
+  range finder drops out), `EKF2_EV_CTRL=9` with the placeholder `EKF2_EV_DELAY=50` and EV
+  gates widened to 50, `NAV_RCL_ACT=6` (Disarm on RC loss), and motor functions on both
+  `PWM_MAIN_FUNC1-4` and `PWM_AUX_FUNC1-4`.
+- **`fleet/SN0001-fixes-2026-10-15.params`** — the delta that airframe should load (QGC "Load
+  from file", then reboot): the DDS pair for drone 1, PX4's "Indoor (flat terrain)" height
+  configuration with the range finder as the reference and baro kept as backup, vision fusion
+  off until the delay is measured, and a 3 m ceiling inside the VL53L1X's 4 m range. Its
+  header explains each value and lists what it deliberately leaves for a human decision.
+
 ## Deliberately not included
 
 - **`EKF2_OF_CTRL` / `EKF2_RNG_CTRL`.** Retiring optical flow and the rangefinder is a separate
@@ -71,5 +95,7 @@ you move the airframe by hand.
 
 - **`EKF2_EV_DELAY = 50`** — a guess. Measure the real end-to-end latency (camera → depthai →
   GPU mono8 conversion → cuVSLAM → DDS → serial) and set it. A wrong delay is a prime toilet-bowl cause.
-- **`UXRCE_DDS_DOM_ID = 0`** — must match `ROS_DOMAIN_ID` on the Jetson. Unset there, so 0 is
-  right today.
+- **`UXRCE_DDS_DOM_ID`** — no longer in `02_telem2_uxrce_dds.params`: it is **per airframe**.
+  Set it by hand to that drone's `ROS_DOMAIN_ID` from `/etc/skybeta/drone.env` (convention:
+  `= DRONE_ID`). On a shared network, every drone left on 0 shares one DDS domain.
+  `param_diff` treats it like `MAV_SYS_ID`: excluded from the fleet comparison.

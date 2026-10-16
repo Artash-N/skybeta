@@ -29,11 +29,13 @@
 #   EKF2_RNG_A_HMAX   5 -> 3   inside the VL53L1X's 4 m driver maximum
 #   EKF2_GPS_CTRL     0 (unchanged, indoor)
 #
-# Vision
-#   EKF2_EV_CTRL      9 -> 0   fusion OFF until EKF2_EV_DELAY is measured on this airframe
-#                              (fleet guide step 7). 50 ms is a placeholder, and the EV gates
-#                              (EKF2_EVP_GATE/EVV_GATE) are currently widened to 50 -- restore
-#                              baseline 5 / 3 before turning vision back on.
+# Vision -- fusion stays ON (EKF2_EV_CTRL 9 = horizontal position + yaw, unchanged; the
+# operator's decision 2026-10-16)
+#   EKF2_EV_DELAY    50 -> 70  measured 2026-10-16 on this Jetson with skybeta:0.2.0
+#                              (tools/latency_probe.py: image -> bridge p50 68.7 ms, p95 102 ms,
+#                              + ~1-2 ms serial). 50 was a placeholder.
+#   EKF2_EVP_GATE    50 -> 5   baseline. At 50 the innovation gate accepts any vision jump
+#   EKF2_EVV_GATE    50 -> 3   (e.g. a cuVSLAM relocalisation) straight into position.
 #
 # Ceiling
 #   GF_MAX_VER_DIST   0 -> 3   the VL53L1X driver maximum is 4 m (long mode) and less in bright
@@ -55,5 +57,7 @@
 1	1	EKF2_RNG_CTRL	1	6
 1	1	EKF2_RNG_A_HMAX	3.000000000000000000	9
 1	1	EKF2_GPS_CTRL	0	6
-1	1	EKF2_EV_CTRL	0	6
+1	1	EKF2_EV_DELAY	70.000000000000000000	9
+1	1	EKF2_EVP_GATE	5.000000000000000000	9
+1	1	EKF2_EVV_GATE	3.000000000000000000	9
 1	1	GF_MAX_VER_DIST	3.000000000000000000	9

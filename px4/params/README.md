@@ -78,8 +78,9 @@ One file per airframe, as it is actually running (fleet guide step 8), diffed wi
   `PWM_MAIN_FUNC1-4` and `PWM_AUX_FUNC1-4`.
 - **`fleet/SN0001-fixes-2026-10-15.params`** — the delta that airframe should load (QGC "Load
   from file", then reboot): the DDS pair for drone 1, PX4's "Indoor (flat terrain)" height
-  configuration with the range finder as the reference and baro kept as backup, vision fusion
-  off until the delay is measured, and a 3 m ceiling inside the VL53L1X's 4 m range. Its
+  configuration ("Indoor (non-flat terrain)": range finder as the reference, conditional, baro
+  kept as backup), vision fusion kept on with the measured `EKF2_EV_DELAY=70` and the EV gates
+  back at 5 / 3, and a 3 m ceiling inside the VL53L1X's 4 m range. Its
   header explains each value and lists what it deliberately leaves for a human decision.
 
 ## Deliberately not included
@@ -93,8 +94,10 @@ One file per airframe, as it is actually running (fleet guide step 8), diffed wi
 
 ## Values that are placeholders, not answers
 
-- **`EKF2_EV_DELAY = 50`** — a guess. Measure the real end-to-end latency (camera → depthai →
-  GPU mono8 conversion → cuVSLAM → DDS → serial) and set it. A wrong delay is a prime toilet-bowl cause.
+- **`EKF2_EV_DELAY = 70`** — measured on the bench Orin, not yet on a flying airframe
+  (2026-10-16, `tools/latency_probe.py`: image → bridge publish p50 68.7 ms, p95 102 ms, plus ~1–2 ms
+  for the serial hop). It replaced a guessed 50. Re-run the probe on each airframe and cross-check
+  with an EKF2 replay log (`SDLOG_PROFILE` bit 7); a wrong delay is a prime toilet-bowl cause.
 - **`UXRCE_DDS_DOM_ID`** — no longer in `02_telem2_uxrce_dds.params`: it is **per airframe**.
   Set it by hand to that drone's `ROS_DOMAIN_ID` from `/etc/skybeta/drone.env` (convention:
   `= DRONE_ID`). On a shared network, every drone left on 0 shares one DDS domain.

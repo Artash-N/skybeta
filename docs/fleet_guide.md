@@ -28,7 +28,7 @@ intermittently and there is no way to tell that from a configuration error.
 | 4 | Stage 01 — TELEM2 as MAVLink | QGC + Jetson | MAVProxy HEARTBEAT |
 | 5 | Stage 02 — TELEM2 as uXRCE-DDS | QGC + container | `check_topics.sh` **echoes data** |
 | 6 | Stage 03a — height reference | QGC | bench hover holds altitude |
-| 7 | Stage 03b — EV fusion | QGC | only after measuring `EKF2_EV_DELAY` |
+| 7 | Stage 03b — EV fusion | QGC | `cs_ev_pos` / `cs_ev_yaw` true; delay re-checked on this airframe |
 | 8 | Record the per-drone baseline | repo | `param_diff` reports zero unexplained drift |
 
 ---
@@ -470,14 +470,13 @@ A drift of more than ~0.2 m over 60 s of stationary hover means do not proceed t
 
 ---
 
-## 7. Stage 03b — EV fusion, **only after measuring the delay**
+## 7. Stage 03b — EV fusion
 
-Do not load this file yet.
-
-`03b_ekf2_vision.params` contains `EKF2_EV_DELAY = 50`, and **50 is a placeholder, not a
-measurement.** Fusing stale position as if it were current turns any oscillation into a
-growing orbit; it is toilet-bowl suspect #3. Measure the real chain latency on *this*
-airframe first.
+`03b_ekf2_vision.params` contains `EKF2_EV_DELAY = 70`, **measured** on the bench Orin on
+2026-10-16 (image → bridge publish p50 68.7 ms, p95 102 ms, plus ~1–2 ms for the serial
+hop). It replaced a guessed 50. Fusing stale position as if it were current turns any
+oscillation into a growing orbit (toilet-bowl suspect #3), so re-check the number on each
+airframe with 7a. Identical hardware should land within a few ms.
 
 ### 7a. Measure
 

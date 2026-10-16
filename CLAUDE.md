@@ -114,6 +114,13 @@ print(len(b),'bytes'); print(bytes(b[:64]).hex(' '))"
 
 ## Flight controller — what the saved logs actually show
 
+**2026-10-15 dump** (`px4/params/fleet/SN0001-2026-10-15.params`): the FC runs **v1.16.1**
+(QGC header "1.16.1 rc", git `94cb2012` = tag `v1.16.1`), not v1.16.2 as stated elsewhere in
+this file. Same 1.16 message generation, so `px4_msgs @ release/1.16` still matches, but the
+fleet pins v1.16.2. Reflashing erases every parameter, so dump first. It also confirms the
+inference made from the agent's discovery traffic: `UXRCE_DDS_DOM_ID=0`, `UXRCE_DDS_PTCFG=0`.
+See `px4/params/README.md` for the rest of what it shows.
+
 `~/Downloads/mav.parm` (1129 params) and `~/Downloads/mav.tlog` (1.38 MB) are a MAVProxy
 capture from **2026-05-07 22:25:49–22:26:44** (55 s, 19918 messages: `ATTITUDE`,
 `HIGHRES_IMU`, `LOCAL_POSITION_NED`, `ODOMETRY`, `TIMESYNC`, plus a param download). That
@@ -383,12 +390,22 @@ pass it** — the default is still zero.
 
 ### Upward drift
 
-**#1 suspect: the PX4 height reference, not the vision code.** The May dump has
-`EKF2_HGT_REF = 2` (Range), `EKF2_BARO_CTRL = 0` (baro fusion **off**), and
-`EKF2_RNG_A_HMAX = 5.0`. Above 5 m the rangefinder stops aiding, and with baro disabled there
-is **no height aiding left at all** — the altitude estimate free-runs, the controller reads it
+**#1 suspect: the PX4 height configuration, not the vision code.** The May dump has
+`EKF2_HGT_REF = 2` (Range), `EKF2_BARO_CTRL = 0` (baro fusion **off**), GPS off, and
+`EKF2_RNG_CTRL = 2`. Once the range finder stops delivering — above its range (the PX4 VL53L1X
+driver's maximum is **4 m**, less in bright light), over an obstacle, a rejected sample — there
+is **no other height source left**, so the altitude estimate free-runs, the controller reads it
 as sinking, and commands a climb that never terminates. That matches "drifts upward and then
 continues upward" precisely, including the fact that it *starts* fine.
+
+*Corrected 2026-10-15:* this entry (and `03a`) used to blame `EKF2_RNG_A_HMAX = 5.0`. The
+firmware's own parameter docs say that limit "only applies when conditional range aid mode is
+activated (EKF2_RNG_CTRL = 1)"; this airframe is on 2 (always). The conclusion stands, the
+mechanism was wrong. The root cause is baro being **off**, not the range finder being the
+reference: PX4 v1.16's documented "Indoor (flat terrain)" setup *is* range as the reference
+(`EKF2_HGT_REF=2`, `EKF2_RNG_CTRL=2`) **with** `EKF2_BARO_CTRL=1`, so the estimator "continues
+to estimate its height using the other sensors" when range drops out. That is what
+`px4/params/fleet/SN0001-fixes-2026-10-15.params` applies.
 
 Check `EKF2_HGT_REF`, `EKF2_BARO_CTRL` and `EKF2_RNG_CTRL` on the FC **before** touching the
 vision code. This is the cheapest fix on the list.

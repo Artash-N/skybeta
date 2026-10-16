@@ -6,10 +6,17 @@
 # Nothing here depends on external vision, so it is safe to apply before the
 # UART link is repaired.
 #
-# Current state (May 7 dump):  EKF2_HGT_REF = 2 (Range), EKF2_BARO_CTRL = 0 (off).
-# Above EKF2_RNG_A_HMAX (5.0 m) the rangefinder stops aiding, and with baro
-# disabled there is then NO height aiding at all - the altitude estimate free-runs,
-# the controller reads it as sinking, and commands a climb that never terminates.
+# Current state (May 7 dump):  EKF2_HGT_REF = 2 (Range), EKF2_BARO_CTRL = 0 (off),
+# GPS off. Whenever the rangefinder stops delivering (above its range -- the VL53L1X
+# driver maximum is 4 m -- over an obstacle, a rejected sample) there is then NO
+# height aiding at all - the altitude estimate free-runs, the controller reads it
+# as sinking, and commands a climb that never terminates. (Corrected 2026-10-15:
+# EKF2_RNG_A_HMAX only applies in conditional mode, EKF2_RNG_CTRL = 1.)
+#
+# The essential fix is EKF2_BARO_CTRL = 1. This file also makes baro the
+# reference; for range-as-reference indoors (PX4 v1.16 "Indoor (flat terrain)":
+# HGT_REF 2, RNG_CTRL 2, BARO_CTRL 1) see fleet/SN0001-fixes-2026-10-15.params.
+# Which one becomes the fleet default depends on the venue floor (flat or not).
 #
 # After loading: reboot the FC, then hover-test in position hold and confirm the
 # altitude holds. Props off first; watch /fmu/out/vehicle_local_position z.

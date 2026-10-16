@@ -68,6 +68,19 @@ One file per airframe, as it is actually running (fleet guide step 8), diffed wi
   is generated from it (`tools/param_diff.py --make-baseline`), and `--selftest` uses it to
   prove the baseline round-trips. It predates `UXRCE_DDS_PTCFG` (absent) and was taken with
   TELEM2 still on MAVLink. Do not overwrite it; record new dumps alongside it.
+- **`fleet/SN0001-2026-10-15.params`** — QGC dump of the same airframe as it actually ran on
+  2026-10-15: **firmware v1.16.1** (git `94cb2012` = tag `v1.16.1`), not the v1.16.2 the fleet
+  pins. `param_diff --dump` reports 28 changed parameters; the ones that matter:
+  `UXRCE_DDS_DOM_ID=0` and `UXRCE_DDS_PTCFG=0` (no `/fmu` data reaches the stack),
+  `EKF2_HGT_REF=0` with `EKF2_BARO_CTRL=0` and `EKF2_GPS_CTRL=0` (no height aiding once the
+  range finder drops out), `EKF2_EV_CTRL=9` with the placeholder `EKF2_EV_DELAY=50` and EV
+  gates widened to 50, `NAV_RCL_ACT=6` (Disarm on RC loss), and motor functions on both
+  `PWM_MAIN_FUNC1-4` and `PWM_AUX_FUNC1-4`.
+- **`fleet/SN0001-fixes-2026-10-15.params`** — the delta that airframe should load (QGC "Load
+  from file", then reboot): the DDS pair for drone 1, PX4's "Indoor (flat terrain)" height
+  configuration with the range finder as the reference and baro kept as backup, vision fusion
+  off until the delay is measured, and a 3 m ceiling inside the VL53L1X's 4 m range. Its
+  header explains each value and lists what it deliberately leaves for a human decision.
 
 ## Deliberately not included
 

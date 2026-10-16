@@ -176,7 +176,7 @@ whose output must match before you move on.
 5  Load 02_telem2_uxrce_dds.params      prove the data        check_topics.sh echoes
    + UXRCE_DDS_DOM_ID = drone number    (02 sets UXRCE_DDS_PTCFG=2)
 6  Load 03a_height_reference.params     bench hover           altitude holds
-7  Measure EKF2_EV_DELAY, then 03b      EV fusion             cs_ev_pos / cs_ev_yaw true
+7  Load 03b (EV_DELAY 70, measured)    EV fusion             cs_ev_pos / cs_ev_yaw true
 8  Save px4/params/fleet/<serial>.params + tools/param_diff.py -> zero drift
 ```
 

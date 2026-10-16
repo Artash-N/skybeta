@@ -326,7 +326,7 @@ Reboot the FC after either change — every param above is reboot-gated.
 | Param | Set to | Currently (May) | Why |
 |---|---|---|---|
 | `EKF2_EV_CTRL` | `9` | **0** | bitmask: `0`=horiz pos, `1`=vert pos, `2`=3D velocity, `3`=yaw. 9 = horiz pos + yaw. Add bit 1 (→11) only once vision altitude is trusted |
-| `EKF2_EV_DELAY` | measured, ~50 | **0** | ms, range 0–300. Measure the real chain latency |
+| `EKF2_EV_DELAY` | `70` | **0** | ms, range 0–300. **Measured** 2026-10-16 on the bench Orin, `tools/latency_probe.py`: image → bridge publish p50 68.7 ms, p95 102 ms, + ~1–2 ms serial. Re-check per airframe |
 | `EKF2_HGT_REF` | `2` (Range) | 2 (Range) | values: `0`=Baro, `1`=GPS, `2`=Range, `3`=Vision. Range is the fleet choice (03a, PX4 "Indoor (non-flat terrain)") |
 | `EKF2_BARO_CTRL` | `1` | **0** | default is Enabled. With baro off and GPS off, losing the range finder leaves **no height aiding** |
 | `EKF2_RNG_CTRL` | `1` (conditional) | 2 | course may have boxes/tables; `2` is PX4's flat-floor variant |

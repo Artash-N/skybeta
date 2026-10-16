@@ -91,7 +91,7 @@ Two halves, and the order between them matters.
 [`../px4/params/00_baseline.params`](../px4/params/00_baseline.params), then **reboot the
 FC**.
 
-927 parameters: the airframe (`SYS_AUTOSTART = 4001`, generic quadcopter), the controller
+924 parameters: the airframe (`SYS_AUTOSTART = 4001`, generic quadcopter), the controller
 gains, the battery configuration, the failsafes, the logging profile — everything that
 should be byte-identical across the fleet. It was generated from a dump of the reference
 airframe with every per-unit value stripped out; the header of the file lists exactly what
@@ -140,9 +140,9 @@ tools/param_diff.py --dump px4/params/fleet/<serial>.params --no-staged
 ```
 
 ```
-  expected  px4/params/00_baseline.params                  927 params
+  expected  px4/params/00_baseline.params                  924 params
   actual    px4/params/fleet/<serial>.params              1129 params
-  merged expected set: 927 params
+  merged expected set: 924 params
 
 OK -- no drift. Every expected parameter matches.
 ```
@@ -419,17 +419,28 @@ it and re-run. A *negative* UART result on a suspect connector is not a result.
 [`../px4/params/03a_height_reference.params`](../px4/params/03a_height_reference.params),
 then **reboot the FC**.
 
-Two parameters: `EKF2_HGT_REF = 0` (Baro) and `EKF2_BARO_CTRL = 1` (baro fusion on).
+Five parameters, PX4 v1.16's documented **"Indoor (non-flat terrain)"** height configuration:
+the range finder is the reference, the barometer is the backup.
+
+| Parameter | Value | |
+|---|---|---|
+| `EKF2_HGT_REF` | `2` (range) | trust the range finder (ST VL53L1X) |
+| `EKF2_BARO_CTRL` | `1` | baro takes over whenever range is not fused |
+| `EKF2_RNG_CTRL` | `1` (conditional) | range only below 1 m/s and below `EKF2_RNG_A_HMAX`, with a height-above-ground consistency gate, so boxes and tables do not drag the height around. `2` (always) is PX4's flat-floor variant |
+| `EKF2_RNG_A_HMAX` | `3.0` m | inside the VL53L1X driver's 4 m maximum |
+| `EKF2_GPS_CTRL` | `0` | indoor |
+
+Set each drone's ceiling to match: `GF_MAX_VER_DIST` (e.g. 3 m), in its fixes file.
 
 This step depends on nothing else in the stack — not vision, not the UART, not the
 container — so it can be done at any point after step 2. It is here because it is the
 runaway-climb fix, and you want it in before anything hovers.
 
-The state it corrects: the reference airframe shipped with `EKF2_HGT_REF = 2` (Range),
-`EKF2_BARO_CTRL = 0`, and `EKF2_RNG_A_HMAX = 5.0`. Above 5 m the rangefinder stops aiding;
-with baro off and GPS unavailable, there is then **no height aiding at all**. The altitude
-estimate free-runs, the controller reads it as sinking, and commands a climb that never
-terminates.
+The state it corrects: the reference airframe shipped with `EKF2_HGT_REF = 2` (Range) but
+`EKF2_BARO_CTRL = 0` and GPS off. Whenever the range finder stopped delivering (above its
+range, over an obstacle, a rejected sample) there was **no height source left**: the
+estimate free-ran, the controller read it as sinking, and commanded a climb that never
+terminated. Range as the reference was never the problem; having nothing behind it was.
 
 ### Verify — bench hover check
 
@@ -563,13 +574,13 @@ tools/param_diff.py --dump px4/params/fleet/<serial>.params
 ```
 
 ```
-  expected  px4/params/00_baseline.params                  927 params
+  expected  px4/params/00_baseline.params                  924 params
   expected  px4/params/01_telem2_mavlink.params              6 params
   expected  px4/params/02_telem2_uxrce_dds.params            6 params
-  expected  px4/params/03a_height_reference.params           2 params
-  expected  px4/params/03b_ekf2_vision.params               11 params
+  expected  px4/params/03a_height_reference.params           5 params
+  expected  px4/params/03b_ekf2_vision.params                9 params
   actual    px4/params/fleet/<serial>.params              1174 params
-  merged expected set: 947 params
+  merged expected set: 946 params
 
 OK -- no drift. Every expected parameter matches.
 ```

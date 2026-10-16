@@ -19,7 +19,7 @@ you can get back regardless.
 
 | File | Purpose | Load when | Needs the UART? |
 |---|---|---|---|
-| `03a_height_reference.params` | baro height aiding | **now** — fixes the runaway climb | no |
+| `03a_height_reference.params` | height: range finder reference, baro backup (PX4 "Indoor (non-flat terrain)") | **now** — fixes the runaway climb | no |
 | `01_telem2_mavlink.params` | TELEM2 → MAVLink | first — proves the UART wiring | — |
 | `02_telem2_uxrce_dds.params` | TELEM2 → uXRCE-DDS | after stage 1 gives a HEARTBEAT | yes |
 | `03b_ekf2_vision.params` | EV fusion | after stage 2 shows data **and** the `pose_frame` bug is fixed | yes |

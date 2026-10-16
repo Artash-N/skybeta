@@ -54,11 +54,9 @@
 #
 #   SYS_AUTOSTART = 4001          Generic Quadcopter -- change it if your
 #                                 airframe is not one.
-#   EKF2_OF_CTRL = 1              optical flow still enabled, EKF2_RNG_CTRL = 2.
-#   EKF2_GPS_CTRL = 7             GPS aiding still enabled.
-#                                 The staged files deliberately do NOT retire
-#                                 these; that is a separate, later decision
-#                                 (px4/params/README.md).
+#   EKF2_OF_CTRL = 1              optical flow still enabled. The staged files
+#                                 deliberately do NOT retire it; that is a
+#                                 separate, later decision (px4/params/README.md).
 #   EKF2_RNG_POS_Y = -0.027432    measured on the reference airframe. Re-measure
 #                                 if your rangefinder sits elsewhere.
 #   BAT1_V_DIV / BAT1_A_PER_V     the Pixhawk 6C power-module defaults. If a
@@ -340,7 +338,6 @@
 1	1	EKF2_GND_EFF_DZ	4.000000	9
 1	1	EKF2_GND_MAX_HGT	0.500000	9
 1	1	EKF2_GPS_CHECK	1023	6
-1	1	EKF2_GPS_CTRL	7	6
 1	1	EKF2_GPS_DELAY	110.000000	9
 1	1	EKF2_GPS_POS_X	0.000000	9
 1	1	EKF2_GPS_POS_Y	0.000000	9
@@ -403,10 +400,8 @@
 1	1	EKF2_REQ_PDOP	2.500000	9
 1	1	EKF2_REQ_SACC	0.500000	9
 1	1	EKF2_REQ_VDRIFT	0.200000	9
-1	1	EKF2_RNG_A_HMAX	5.000000	9
 1	1	EKF2_RNG_A_IGATE	1.000000	9
 1	1	EKF2_RNG_A_VMAX	1.000000	9
-1	1	EKF2_RNG_CTRL	2	6
 1	1	EKF2_RNG_DELAY	5.000000	9
 1	1	EKF2_RNG_FOG	1.000000	9
 1	1	EKF2_RNG_GATE	5.000000	9

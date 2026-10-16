@@ -256,10 +256,10 @@ skybeta/
 │   ├── firmware/                    px4_fmu-v6c_default-v1.16.2.px4 + .sha256 + README
 │   └── params/
 │       ├── README.md                the staged files and the order they go in
-│       ├── 00_baseline.params       927 fleet-common parameters, no calibration
+│       ├── 00_baseline.params       924 fleet-common parameters, no calibration
 │       ├── 01_telem2_mavlink.params      TELEM2 -> MAVLink, proves the wire
 │       ├── 02_telem2_uxrce_dds.params    TELEM2 -> uXRCE-DDS
-│       ├── 03a_height_reference.params   baro height aiding (the runaway-climb fix)
+│       ├── 03a_height_reference.params   range-finder height + baro backup (the runaway-climb fix)
 │       ├── 03b_ekf2_vision.params        EV fusion
 │       └── fleet/                   per-drone saved dumps: <serial>.params, plus the
 │                                    SN0001 reference dump the baseline was generated from

@@ -327,15 +327,16 @@ Reboot the FC after either change — every param above is reboot-gated.
 |---|---|---|---|
 | `EKF2_EV_CTRL` | `9` | **0** | bitmask: `0`=horiz pos, `1`=vert pos, `2`=3D velocity, `3`=yaw. 9 = horiz pos + yaw. Add bit 1 (→11) only once vision altitude is trusted |
 | `EKF2_EV_DELAY` | measured, ~50 | **0** | ms, range 0–300. Measure the real chain latency |
-| `EKF2_HGT_REF` | `0` (Baro) | **2** (Range) | values: `0`=Baro, `1`=GPS, `2`=Range, `3`=Vision. Default is 1 |
-| `EKF2_BARO_CTRL` | `1` | **0** | default is Enabled. `HGT_REF=0` with `BARO_CTRL=0` leaves **no height aiding** |
+| `EKF2_HGT_REF` | `2` (Range) | 2 (Range) | values: `0`=Baro, `1`=GPS, `2`=Range, `3`=Vision. Range is the fleet choice (03a, PX4 "Indoor (non-flat terrain)") |
+| `EKF2_BARO_CTRL` | `1` | **0** | default is Enabled. With baro off and GPS off, losing the range finder leaves **no height aiding** |
+| `EKF2_RNG_CTRL` | `1` (conditional) | 2 | course may have boxes/tables; `2` is PX4's flat-floor variant |
 | `EKF2_EV_NOISE_MD` | `0` | 0 | 0 = trust the variance in the message (params as lower bound); 1 = use params directly. **At 0 the bridge's swapped variances (bug #4) actually reach the estimator** |
 | `EKF2_EVP/EVV_NOISE` | `0.1` | 0.1 ✓ | — |
 | `EKF2_EVA_NOISE` | `0.05` | 0.1 | README asks for 0.05 |
 | `EKF2_EV_POS_X/Y/Z` | `0` | 0 ✓ | keep zero — the static TF carries the lever arm (bug #9) |
 
 Only once vision is trusted, retire the sensors it replaces: `EKF2_OF_CTRL = 0` (optical flow,
-currently `1`) and review `EKF2_RNG_CTRL` (currently `2`). Do not change these in the same
+currently `1`); the range finder stays as the height reference (03a). Do not change these in the same
 sitting as enabling EV — change one thing at a time or you cannot attribute the result.
 
 ## Flight symptoms → most likely causes

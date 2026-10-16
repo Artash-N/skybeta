@@ -354,7 +354,7 @@ case "${MODE}" in
         UXRCE_DDS_DOM_ID=${ROS_DOMAIN_ID}   (must equal ROS_DOMAIN_ID on this Jetson)
         UXRCE_DDS_PTCFG=2    (agent builds PX4's participant from dds/agent_refs_${SKYBETA_DDS_SCOPE}.xml;
                               with 0, /fmu/* never reaches the stack in local scope)
-        EKF2_EV_CTRL=9 (horiz pos + yaw)   EKF2_HGT_REF=0 (Baro)   EKF2_BARO_CTRL=1
+        EKF2_EV_CTRL=9 (horiz pos + yaw)   EKF2_HGT_REF=2 (range)  EKF2_RNG_CTRL=1  EKF2_BARO_CTRL=1
         EKF2_EV_DELAY = measured, not assumed   EKF2_EVP/EVV_NOISE=0.1  EKF2_EVA_NOISE=0.05
       See CLAUDE.md "Target PX4 parameter sets" -- MAV_1_CONFIG and UXRCE_DDS_CFG
       must never both point at 102.

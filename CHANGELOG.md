@@ -38,6 +38,9 @@ on the drone itself.
 - `host/run.sh shell` attaches to the running stack instead of refusing.
 - `COMPETITOR_PKG` / `COMPETITOR_LAUNCH` now actually reach the container (they never did).
 - `host/doctor.sh`: two new checks, `drone-identity` and `team-ws` (twelve in total).
+- `host/doctor.sh --json`: one JSON object instead of the table (schema 1: `checks[]` of
+  `{name, result, detail}` plus `pass`/`warn`/`fail`/`ok`), same checks and exit status.
+  The fleet status agent reads it. Tested by `host/tests/test_doctor_json.sh`.
 - `UXRCE_DDS_DOM_ID` is per-airframe: removed from the 02 file, excluded by `param_diff`.
 - pip packages pinned to what 0.1.0 shipped (`depthai==3.10.0`, `MAVProxy==1.8.74`,
   `pymavlink==2.4.49`, `numpy<2`); an unpinned rebuild pulled numpy 2 and opencv 5.

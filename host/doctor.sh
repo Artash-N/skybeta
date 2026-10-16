@@ -10,6 +10,9 @@
 #   host/doctor.sh                 # all checks except the camera boot
 #   host/doctor.sh --boot-camera   # also start a container and open the OAK-D
 #   host/doctor.sh --no-uart       # skip the 3 s serial sniff
+#   host/doctor.sh --json          # one JSON object on stdout instead of the table
+#                                  # (schema 1: date host image version args checks[]
+#                                  #  {name result detail} pass warn fail ok)
 #
 # Exit status: 0 if no check FAILed (WARNs do not fail), 1 otherwise.
 set -uo pipefail
@@ -26,22 +29,43 @@ IMAGE="${IMAGE:-skybeta:${TAG}}"
 
 BOOT_CAMERA=0
 DO_UART=1
+JSON=0
 for arg in "$@"; do
   case "${arg}" in
     --boot-camera) BOOT_CAMERA=1 ;;
     --no-uart)     DO_UART=0 ;;
-    -h|--help)     sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --json)        JSON=1 ;;
+    -h|--help)     sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown flag: ${arg}" >&2; exit 2 ;;
   esac
 done
 
 n_pass=0; n_warn=0; n_fail=0
-pass() { printf '  \033[32mPASS\033[0m  %-26s %s\n' "$1" "${2-}"; n_pass=$((n_pass+1)); }
-warn() { printf '  \033[33mWARN\033[0m  %-26s %s\n' "$1" "${2-}"; n_warn=$((n_warn+1)); }
-fail() { printf '  \033[31mFAIL\033[0m  %-26s %s\n' "$1" "${2-}"; n_fail=$((n_fail+1)); }
+C_NAME=(); C_RES=(); C_DET=()
+record() { C_RES+=("$1"); C_NAME+=("$2"); C_DET+=("${3-}"); }
+show() { [[ "${JSON}" -eq 1 ]] || printf "  \033[$1m%s\033[0m  %-26s %s\n" "$2" "$3" "${4-}"; }
+pass() { record PASS "$@"; n_pass=$((n_pass+1)); show 32 PASS "$@"; }
+warn() { record WARN "$@"; n_warn=$((n_warn+1)); show 33 WARN "$@"; }
+fail() { record FAIL "$@"; n_fail=$((n_fail+1)); show 31 FAIL "$@"; }
 
-echo "skybeta doctor -- $(date -Is)  host=$(hostname)  image=${IMAGE}"
-echo
+# A JSON string literal. C0 control characters other than \t \n \r are dropped.
+json_str() {
+  local s
+  s="$(printf '%s' "$1" | tr -d '\000-\010\013\014\016-\037')"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  printf '"%s"' "${s}"
+}
+
+RUN_DATE="$(date -Is)"
+RUN_ARGS=("$@")
+if [[ "${JSON}" -eq 0 ]]; then
+  echo "skybeta doctor -- ${RUN_DATE}  host=$(hostname)  image=${IMAGE}"
+  echo
+fi
 
 # 1 -- L4T release --------------------------------------------------------
 REL_FILE=/etc/nv_tegra_release
@@ -295,7 +319,24 @@ else
 fi
 
 # --------------------------------------------------------------------------
-echo
-printf 'doctor: %d PASS  %d WARN  %d FAIL\n' "${n_pass}" "${n_warn}" "${n_fail}"
+if [[ "${JSON}" -eq 1 ]]; then
+  args_json=""
+  for a in ${RUN_ARGS[@]+"${RUN_ARGS[@]}"}; do
+    args_json+="${args_json:+,}$(json_str "${a}")"
+  done
+  checks_json=""
+  for i in "${!C_NAME[@]}"; do
+    checks_json+="${checks_json:+,}"$'\n  '
+    checks_json+="{\"name\":$(json_str "${C_NAME[$i]}"),\"result\":\"${C_RES[$i]}\",\"detail\":$(json_str "${C_DET[$i]}")}"
+  done
+  ok=true; [[ "${n_fail}" -eq 0 ]] || ok=false
+  printf '{"schema":1,"date":%s,"host":%s,"image":%s,"version":%s,"args":[%s],\n"checks":[%s\n],\n"pass":%d,"warn":%d,"fail":%d,"ok":%s}\n' \
+    "$(json_str "${RUN_DATE}")" "$(json_str "$(hostname)")" "$(json_str "${IMAGE}")" \
+    "$(json_str "${TAG}")" "${args_json}" "${checks_json}" \
+    "${n_pass}" "${n_warn}" "${n_fail}" "${ok}"
+else
+  echo
+  printf 'doctor: %d PASS  %d WARN  %d FAIL\n' "${n_pass}" "${n_warn}" "${n_fail}"
+fi
 [[ "${n_fail}" -eq 0 ]] || exit 1
 exit 0

@@ -64,6 +64,7 @@ Phases, in order:
 host/doctor.sh                  # every check except the camera boot
 host/doctor.sh --boot-camera    # also opens the OAK-D and reads getUsbSpeed()
 host/doctor.sh --no-uart        # skip the 3 s serial sniff
+host/doctor.sh --json           # one JSON object (for scripts and the fleet dashboard)
 ```
 
 Twelve checks: L4T release · UARTA `iommus`/`dmas` in the live device tree ·

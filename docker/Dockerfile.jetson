@@ -165,7 +165,7 @@ RUN echo 'source /usr/local/bin/skybeta_env.sh' >> /root/.bashrc \
 #    docker inspect --format '{{json .Config.Labels}}' skybeta:<tag>
 LABEL org.opencontainers.image.title="skybeta" \
       org.opencontainers.image.description="Jetson cuVSLAM (OAK-D-S2) + PX4 uXRCE-DDS stack" \
-      org.opencontainers.image.source="https://github.com/kelvindinhnguyen/skybeta" \
+      org.opencontainers.image.source="https://github.com/Artash-N/skybeta" \
       io.skybeta.ros-snapshot="${SNAPSHOT_DATE}" \
       io.skybeta.px4-firmware="1.16.2" \
       io.skybeta.px4-msgs-ref="${PX4_MSGS_REF}" \

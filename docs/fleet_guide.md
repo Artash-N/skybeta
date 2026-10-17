@@ -216,6 +216,8 @@ what makes it safe to put in a fleet script.
 
 The registry is a deployment choice, so everything here uses a `REGISTRY` placeholder.
 Set it to wherever your fleet's images live and keep it consistent across all ten drones.
+[`distribution.md`](distribution.md) compares the options (LAN `registry:2`, TLS, a hosted
+private registry, or none) and covers plain-HTTP registries and pull-only credentials.
 
 ```bash
 export REGISTRY=<your-registry>/<your-org>
@@ -224,8 +226,10 @@ host/pull_image.sh $(cat VERSION)
 
 The image is **42.6 GB**, of which **40.3 GB is the public NGC Isaac ROS base**.
 `pull_image.sh` fetches that base from `nvcr.io` **first**, so the subsequent registry
-pull finds every base layer already on disk and transfers only the ~2.3 GB skybeta delta.
-Pull skybeta first and you drag 42.6 GB across the venue network — per drone, ten times.
+pull finds every base layer already on disk and transfers only the skybeta delta (~2.3 GB
+unpacked, ~0.6 GB over the wire). Pull skybeta first and you drag 13 GB across the venue
+network — per drone, ten times. With no route to `nvcr.io` the pull still succeeds: the base
+layers then come from your registry too.
 
 At a venue with a poor uplink, stand up a pull-through cache:
 
@@ -660,7 +664,9 @@ REGISTRY=<your-registry>/<your-org> host/pull_image.sh 0.2.0
 
 Bump `VERSION` when you cut an image the fleet is meant to run, so a semver tag never
 points at two different builds. Roll out to **one** drone, fly it, then the rest. Ten
-drones on a bad image is ten drones down.
+drones on a bad image is ten drones down. The code and the image move together (the
+checkout's `VERSION` names the image `run.sh` starts); the update order per drone is in
+[`distribution.md`](distribution.md#updating-a-fleet).
 
 ### Before every competition day
 

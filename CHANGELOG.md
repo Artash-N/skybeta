@@ -38,6 +38,11 @@ on the drone itself.
 - `host/run.sh shell` attaches to the running stack instead of refusing.
 - `COMPETITOR_PKG` / `COMPETITOR_LAUNCH` now actually reach the container (they never did).
 - `host/doctor.sh`: two new checks, `drone-identity` and `team-ws` (twelve in total).
+- Image distribution, verified against a real registry (`docs/distribution.md`):
+  `push_image.sh` now tags the commit the image was **built from** (it used the current
+  checkout's), `build_image.sh` stamps it as the `io.skybeta.git-sha` label, and
+  `pull_image.sh` no longer aborts when `nvcr.io` is unreachable (the base layers come from
+  your registry instead). The image source label now names `Artash-N/skybeta`.
 - `host/doctor.sh --json`: one JSON object instead of the table (schema 1: `checks[]` of
   `{name, result, detail}` plus `pass`/`warn`/`fail`/`ok`), same checks and exit status.
   The fleet status agent reads it. Tested by `host/tests/test_doctor_json.sh`.

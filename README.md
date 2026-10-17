@@ -235,6 +235,7 @@ skybeta/
 ├── docs/
 │   ├── competitor_guide.md          the API, the envelope, RC procedure, C++ track
 │   ├── fleet_guide.md               per-drone bring-up, 8 verified steps
+│   ├── distribution.md              the image: contents, registries, pulling, updating a fleet
 │   ├── hardware_checklist.md        build-time + pre-flight physical checks
 │   └── debugging.md                 symptom -> cause -> fix
 ├── host/                            things a container cannot do for itself
@@ -305,14 +306,17 @@ precompiled for Jetson.
 
 | | |
 |---|---|
-| Full image on disk | **42.6 GB** |
-| Shared public NGC base | **40.3 GB** |
-| **skybeta delta** | **~2.3 GB** |
+| | Unpacked on disk | Transferred (compressed) |
+|---|---|---|
+| Full image | **42.6 GB** | 13.2 GB |
+| Shared public NGC base | **40.3 GB** | 12.6 GB |
+| **skybeta delta** | **~2.3 GB** | **~0.6 GB** |
 
 The delta is the number that matters for fleet distribution. `host/pull_image.sh` fetches
 the NGC base from `nvcr.io` **first**, so the registry pull then finds every base layer
-already present and transfers only the delta. Pull skybeta first and you drag 42.6 GB
-across the venue network, once per drone.
+already present and transfers only the delta. Pull skybeta first and you drag 13 GB
+across the venue network, once per drone. Registry options, credentials, offline venues
+and fleet updates: **[`docs/distribution.md`](docs/distribution.md)**.
 
 ### Pins, and the reasons for them
 

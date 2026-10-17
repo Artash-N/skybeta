@@ -111,6 +111,7 @@ docker build \
   -t "${TAG_SEMVER}" \
   -t "${TAG_GITSHA}" \
   -t "${TAG_COMPAT}" \
+  --label "io.skybeta.git-sha=${GIT_SHA}" \
   "${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}" \
   "${CACHE_ARGS[@]+"${CACHE_ARGS[@]}"}" \
   "${REPO_ROOT}"

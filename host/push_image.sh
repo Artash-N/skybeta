@@ -11,10 +11,12 @@
 # `latest` is never pushed. Drones pull a pinned tag (host/pull_image.sh) so a
 # fleet cannot silently split across image versions mid-competition.
 #
-# Layer dedup: the ~40 GB NGC base is a public image the drones pull straight
-# from nvcr.io. The registry still stores the full image, but the per-drone
-# transfer is only the ~1-2 GB skybeta delta because the base layers are already
-# on disk. Do NOT strip the base out of the push — the manifest needs it.
+# Layer dedup: the NGC base (40 GB unpacked, 12.6 GB compressed) is a public image
+# the drones pull straight from nvcr.io. The registry still stores the full image
+# (~13 GB), but the per-drone transfer is only the ~0.6 GB compressed skybeta delta
+# because the base layers are already on disk. Do NOT strip the base out of the
+# push: the manifest needs it, and an offline drone gets the base from here.
+# Any registry works; docs/distribution.md compares them.
 #
 # Log in first:
 #   echo "$GHCR_PAT" | docker login ghcr.io -u <user> --password-stdin
@@ -68,18 +70,6 @@ REGISTRY="${REGISTRY%/}"
 VERSION="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION")"
 [[ -n "${VERSION}" ]] || { echo "push_image.sh: VERSION is empty" >&2; exit 1; }
 
-GIT_SHA="nogit"
-if git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
-  GIT_SHA="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD)"
-  git -C "${REPO_ROOT}" diff --quiet HEAD -- 2>/dev/null || GIT_SHA="${GIT_SHA}-dirty"
-fi
-
-TAGS=(
-  "${VERSION}"
-  "${GIT_SHA}"
-  "${VERSION}-px4_${PX4_FIRMWARE}-isaacros_${ISAAC_ROS_VERSION}"
-)
-
 # Everything is pushed from the semver tag's image id, so all three remote tags
 # are guaranteed to be the same image even if a local tag drifted.
 SRC="${IMAGE_NAME}:${VERSION}"
@@ -89,6 +79,32 @@ if ! docker image inspect "${SRC}" >/dev/null 2>&1; then
 fi
 IMAGE_ID="$(docker image inspect "${SRC}" --format '{{.Id}}')"
 echo "[push] source ${SRC} (${IMAGE_ID})"
+
+# The git-sha tag names the commit the image was BUILT from, not whatever is
+# checked out now (the checkout moves on; a param or doc commit does not rebuild
+# the image). Source, in order: the io.skybeta.git-sha label build_image.sh
+# stamps, then the <sha> tag build_image.sh put on the same image id locally.
+# If neither exists the sha tag is skipped rather than guessed.
+GIT_SHA="$(docker image inspect "${SRC}" --format '{{index .Config.Labels "io.skybeta.git-sha"}}' 2>/dev/null || true)"
+[[ "${GIT_SHA}" == "<no value>" ]] && GIT_SHA=""
+if [[ -z "${GIT_SHA}" ]]; then
+  # (bash regex, not awk: Ubuntu's default mawk has no {12} intervals)
+  while read -r tag id; do
+    if [[ "${IMAGE_ID#sha256:}" == "${id}"* && "${tag}" =~ ^[0-9a-f]{12}(-dirty)?$ ]]; then
+      GIT_SHA="${tag}"; break
+    fi
+  done < <(docker image ls "${IMAGE_NAME}" --format '{{.Tag}} {{.ID}}' 2>/dev/null)
+fi
+
+TAGS=("${VERSION}")
+if [[ -n "${GIT_SHA}" ]]; then
+  echo "[push] built from commit ${GIT_SHA}"
+  TAGS+=("${GIT_SHA}")
+else
+  echo "[push] WARNING: cannot tell which commit ${SRC} was built from (no io.skybeta.git-sha" >&2
+  echo "[push]          label, no local <sha> tag) -- not pushing a git-sha tag" >&2
+fi
+TAGS+=("${VERSION}-px4_${PX4_FIRMWARE}-isaacros_${ISAAC_ROS_VERSION}")
 
 run() {
   if [[ ${DRY_RUN} -eq 1 ]]; then

@@ -875,6 +875,13 @@ never passed either variable into `docker run`, so the stack always launched
   in `docker/ros-snapshots.key.asc`) and leaves the Isaac channel alone — that is what makes
   two builds weeks apart identical.
 - `Micro-XRCE-DDS-Agent` is pinned to **v2.4.3** because the **PX4 v1.16 ROS 2 guide specifies exactly that tag** (`git clone -b v2.4.3 …`). The older "v3.x is wire-incompatible with v1.14" rationale in this repo's history was wrong. Don't bump it.
+- **Image distribution is registry-agnostic and was verified end to end on 2026-10-16** (see
+  [`docs/distribution.md`](docs/distribution.md)): `push_image.sh` into a throwaway `registry:2`, the
+  registry serving the same content digest, `pull_image.sh` back out. Compressed transfer: NVIDIA base
+  12.6 GB, skybeta layers ~0.6 GB; registry storage ~13 GB per version. `push_image.sh` takes the
+  git-sha tag from the image (label `io.skybeta.git-sha`, else the local `<sha>` tag), **never from the
+  checkout**, which moves on without rebuilding. Ubuntu's default `awk` is **mawk: no `{n}` regex
+  intervals** -- use bash `[[ =~ ]]` in host scripts.
 - `px4_msgs` (`release/1.16`) and `px4-ros2-interface-lib` (`release/1.16`) are cloned at build
   time; their resolved SHAs are baked into the image at `/root/skybeta_ws/*.sha` so a drifted
   rebuild is detectable.

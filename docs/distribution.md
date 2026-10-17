@@ -17,7 +17,7 @@ registry is a deployment choice and nothing in the scripts assumes one.
 | pip | `depthai==3.10.0`, `MAVProxy==1.8.74`, `pymavlink==2.4.49`, `numpy<2` |
 | udev | the OAK-D (`03e7`) rule |
 | agent | **Micro-XRCE-DDS-Agent v2.4.3**, built from source: the bridge between ROS 2 and PX4 over the TELEM2 UART |
-| workspace | `/root/skybeta_ws`, built with colcon: `px4_msgs` and `px4-ros2-interface-lib` (both `release/1.16`), and the four packages in `src/`: `oakd_vslam_bringup` (camera + GPU mono conversion + cuVSLAM launch, and the odometry bridge to PX4), `skybeta_flight_interface` (the competitor-facing offboard wrapper: geofence, ENU/NED, **no arm path**), `competitor_example`, `competitor_advanced_cpp` |
+| workspace | `/root/skybeta_ws`, built with colcon: `px4_msgs` and `px4-ros2-interface-lib` (both `release/1.16`), and the four packages in `src/`: `oakd_vslam_bringup` (camera + GPU mono conversion + cuVSLAM launch, and the odometry bridge to PX4), `skybeta_flight_interface` (the competitor-facing offboard wrapper: altitude and speed clamp, ENU/NED, **no arm path**; no geofence since 0.3.0), `competitor_example`, `competitor_advanced_cpp` |
 | scripts | `container_scripts/` on `$PATH`: `run_agent.sh`, `run_slam.sh`, `run_bridge.sh`, `run_full_stack.sh`, `run_competitor.sh`, `team_build.sh`, `check_topics.sh`, `record_bag.sh`, `skybeta_env.sh` |
 | labels | provenance: ROS snapshot date, PX4 firmware, git refs, agent tag, and (from builds after 2026-10-16) `io.skybeta.git-sha`, the commit it was built from |
 
@@ -126,9 +126,9 @@ moved on.
 ## Installing on a drone
 
 ```bash
-REGISTRY=<reg> host/pull_image.sh 0.2.0            # NVIDIA base from nvcr.io, then the skybeta layers
-REGISTRY=<reg> host/pull_image.sh 0.2.0 --skip-base  # everything from <reg> (offline venue)
-MIRROR=<lan-host:5000> REGISTRY=<reg> host/pull_image.sh 0.2.0   # through a LAN pull-through cache
+REGISTRY=<reg> host/pull_image.sh 0.3.0            # NVIDIA base from nvcr.io, then the skybeta layers
+REGISTRY=<reg> host/pull_image.sh 0.3.0 --skip-base  # everything from <reg> (offline venue)
+MIRROR=<lan-host:5000> REGISTRY=<reg> host/pull_image.sh 0.3.0   # through a LAN pull-through cache
 ```
 
 `host/provision.sh` runs the pull as one of its phases when `REGISTRY` is set. The fleet's

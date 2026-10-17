@@ -4,7 +4,7 @@
   <version>0.1.0</version>
   <description>
     The only node that talks to PX4 offboard: 10 Hz OffboardControlMode
-    heartbeat, ENU-&gt;NED setpoint conversion, geofence/altitude/speed clamp.
+    heartbeat, ENU-&gt;NED setpoint conversion, altitude/speed clamp.
     Never arms and never changes mode -- the safety pilot does both on RC.
   </description>
   <maintainer email="kelvindinhnguyen@gmail.com">kelvin</maintainer>

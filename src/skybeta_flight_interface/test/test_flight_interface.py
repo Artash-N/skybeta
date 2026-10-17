@@ -120,7 +120,7 @@ def test_defaults(node):
     assert node.setpoint_rate_hz == 10.0
     assert node.allow_mode_request is False
     assert node.anchor_setpoints is False
-    assert node.envelope.geofence_radius_m == 10.0
+    assert not node.has_parameter('geofence_radius_m')
     assert node.envelope.max_altitude_m == 3.0
     assert node.mode == 'hold'
 
@@ -204,15 +204,15 @@ def test_pose_setpoint_yaw_is_ninety_minus_enu_yaw(node):
         90.0, abs=1e-4)
 
 
-def test_pose_outside_the_geofence_is_clamped_not_rejected(node):
+def test_far_pose_passes_through_there_is_no_geofence(node):
     node.odometry_cb(make_odometry(0.0, 0.0, 0.0))
     node.pose_setpoint_cb(make_pose(18.0, 24.0, 1.5))   # 30 m out
     node.tick()
-    assert node.mode == 'position'                       # not rejected
-    assert 'geofence_radius' in node.last_clamp_reasons
-    # ENU clamped to (6, 8, 1.5) -> NED (8, 6, -1.5)
+    assert node.mode == 'position'
+    assert node.last_clamp_reasons == ()
+    # ENU (18, 24, 1.5) -> NED (24, 18, -1.5), untouched
     assert list(node.setpoints.last.position) == pytest.approx(
-        [8.0, 6.0, -1.5])
+        [24.0, 18.0, -1.5])
 
 
 def test_pose_above_the_ceiling_is_clamped(node):
@@ -223,13 +223,15 @@ def test_pose_above_the_ceiling_is_clamped(node):
     assert node.setpoints.last.position[2] == pytest.approx(-3.0)
 
 
-def test_geofence_is_relative_to_the_first_odometry_sample(node):
+def test_altitude_band_is_relative_to_the_first_odometry_sample(node):
     node.odometry_cb(make_odometry(100.0, 100.0, 5.0))
     assert node.odom_origin_enu == (100.0, 100.0, 5.0)
     node.odometry_cb(make_odometry(101.0, 100.0, 6.0))       # origin sticks
     assert node.odom_origin_enu == (100.0, 100.0, 5.0)
-    node.pose_setpoint_cb(make_pose(105.0, 100.0, 6.5))      # 5 m out, 1.5 up
+    node.pose_setpoint_cb(make_pose(105.0, 100.0, 6.5))      # 1.5 m up
     assert node.last_clamp_reasons == ()
+    node.pose_setpoint_cb(make_pose(105.0, 100.0, 9.0))      # 4 m up
+    assert node.last_clamp_reasons == ('max_altitude',)
 
 
 def test_non_finite_pose_is_ignored(node):
@@ -368,7 +370,8 @@ def test_state_reports_offboard_and_armed(node):
     assert state['odom_enu'] == pytest.approx([1.0, 2.0, 4.5])
     # PX4 NED (2, 1, -3) reported back in ENU as (1, 2, 3).
     assert state['local_enu'] == pytest.approx([1.0, 2.0, 3.0])
-    assert state['geofence_ok'] is True
+    assert state['envelope_ok'] is True
+    assert 'geofence_ok' not in state
     assert state['setpoint_mode'] == 'hold'
 
 
@@ -381,28 +384,28 @@ def test_state_reports_offboard_false_in_another_mode(node):
     assert state['nav_state_name'] == 'POSCTL'
 
 
-def test_state_geofence_ok_goes_false_when_the_vehicle_leaves(node):
+def test_state_envelope_ok_stays_true_far_out(node):
     node.odometry_cb(make_odometry(0.0, 0.0, 1.0))     # origin
-    node.odometry_cb(make_odometry(30.0, 0.0, 2.0))    # carried out of bounds
+    node.odometry_cb(make_odometry(30.0, 0.0, 2.0))    # 30 m out: no geofence
     node.publish_state()
     state = json.loads(node.states.last.data)
-    assert state['geofence_ok'] is False
-    assert state['envelope']['geofence_radius_m'] == 10.0
+    assert state['envelope_ok'] is True
+    assert 'geofence_radius_m' not in state['envelope']
 
 
-def test_state_geofence_ok_is_true_sitting_on_the_ground(node):
+def test_state_envelope_ok_is_true_sitting_on_the_ground(node):
     """A vehicle below the altitude floor has not breached anything -- the
     floor is a setpoint clamp, not a vehicle-state violation."""
     node.odometry_cb(make_odometry(0.0, 0.0, 0.0))     # origin, on the ground
     node.publish_state()
-    assert json.loads(node.states.last.data)['geofence_ok'] is True
+    assert json.loads(node.states.last.data)['envelope_ok'] is True
 
 
-def test_state_geofence_ok_goes_false_above_the_ceiling(node):
+def test_state_envelope_ok_goes_false_above_the_ceiling(node):
     node.odometry_cb(make_odometry(0.0, 0.0, 0.0))
     node.odometry_cb(make_odometry(0.0, 0.0, 9.0))
     node.publish_state()
-    assert json.loads(node.states.last.data)['geofence_ok'] is False
+    assert json.loads(node.states.last.data)['envelope_ok'] is False
 
 
 def test_state_reports_the_clamp_reasons(node):
@@ -410,7 +413,7 @@ def test_state_reports_the_clamp_reasons(node):
     node.pose_setpoint_cb(make_pose(100.0, 0.0, 100.0))
     node.publish_state()
     state = json.loads(node.states.last.data)
-    assert set(state['clamped']) == {'geofence_radius', 'max_altitude'}
+    assert state['clamped'] == ['max_altitude']
     assert state['setpoint_mode'] == 'position'
 
 

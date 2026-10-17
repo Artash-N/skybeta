@@ -168,10 +168,10 @@ class SquareMission(Node):
     def build_square(self):
         """Four corners, counter-clockwise from the hover point.
 
-        A 5 m square from the origin reaches sqrt(2) * 5 = 7.07 m at the far
-        corner -- inside the 10 m default geofence, but check your own
-        envelope before enlarging it: the flight interface will clamp the
-        corner onto the fence and the vehicle will simply never "arrive".
+        There is no horizontal limit in the flight interface, so the square
+        is flown at whatever size you ask for: make sure it fits the room.
+        Its height is still clamped to the altitude band, and a clamped
+        corner is one the vehicle will simply never "arrive" at.
         """
         x0, y0, _ = self.start
         z = self.start[2] + self.hover_altitude

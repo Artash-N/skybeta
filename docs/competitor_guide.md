@@ -99,28 +99,27 @@ boundary.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `geofence_radius_m` | `10.0` | Horizontal radius about the origin captured at the **first odometry sample** |
-| `max_altitude_m` | `3.0` | Ceiling above that origin |
+| `max_altitude_m` | `3.0` | Ceiling above the origin captured at the **first odometry sample** |
 | `min_altitude_m` | `0.3` | Floor above that origin — stops you commanding into the ground |
 | `max_speed_mps` | `1.5` | Cap on the **norm** of a twist setpoint, not per-axis |
 
-Horizontal excursions are scaled back onto the fence along the same bearing, so your
-commanded *direction* survives and only the distance changes. Altitude is clipped
-independently. Each clamp logs a throttled WARN and shows up in `/skybeta/state`.
+**There is no horizontal geofence** (removed in 0.3.0). A position setpoint's x and y go to
+PX4 exactly as you wrote them, however far out they are: keeping the vehicle inside the
+room or the netting is your code's job and the safety pilot's. Only the altitude is clipped.
+Each clamp logs a throttled WARN and shows up in `/skybeta/state`.
 
 **A clamped setpoint you never notice looks exactly like a vehicle that will not reach its
 waypoint.** If your mission hangs at a corner, check `clamped` in `/skybeta/state` before you
 check anything else. The example node logs this for you.
 
-The 5 m square in `competitor_example` reaches √2 × 5 = 7.07 m at its far corner, inside the
-10 m default. Enlarge the square and you must enlarge the fence too — or it will silently
-never arrive.
+The 5 m square in `competitor_example` reaches √2 × 5 = 7.07 m from the start at its far
+corner, and nothing stops a bigger one: size it to the space you fly in.
 
 Tighten the envelope from the launch file; do not loosen it without asking:
 
 ```bash
 ros2 launch competitor_example competitor.launch.py \
-    geofence_radius_m:=6.0 max_altitude_m:=2.0 square_side_m:=3.0
+    max_altitude_m:=2.0 square_side_m:=3.0
 ```
 
 ---
@@ -140,12 +139,12 @@ A JSON string at 5 Hz. Parse it with `json.loads(msg.data)`.
   "odom_enu":   [0.12, -0.04, 1.50],
   "origin_enu": [0.00,  0.00, 0.00],
   "local_enu":  [0.11, -0.05, 1.49],
-  "geofence_ok": true,
+  "envelope_ok": true,
   "setpoint_mode": "position",
   "clamped": [],
   "frozen": false,
-  "envelope": {"geofence_radius_m": 10.0, "min_altitude_m": 0.3,
-               "max_altitude_m": 3.0, "max_speed_mps": 1.5}
+  "envelope": {"min_altitude_m": 0.3, "max_altitude_m": 3.0,
+               "max_speed_mps": 1.5}
 }
 ```
 
@@ -153,12 +152,12 @@ A JSON string at 5 Hz. Parse it with `json.loads(msg.data)`.
   pilot flips the switch, and false the instant they take over.
 - `odom_enu` is cuVSLAM's position; `local_enu` is EKF2's own estimate reported back in ENU.
   They should track each other. If they diverge, the vision link is degrading.
-- `geofence_ok` describes the **vehicle**, not the setpoint — so you can see it being carried
-  out of bounds by momentum or by the pilot. It covers the radius and the ceiling only:
-  a vehicle on the pad, or being landed, is legitimately below `min_altitude_m` and is not
-  reported as a breach.
-- `clamped` lists the reasons the last setpoint was modified: `geofence_radius`,
-  `max_altitude`, `min_altitude`, `max_speed`.
+- `envelope_ok` describes the **vehicle**, not the setpoint: false while the vehicle is above
+  `max_altitude_m` (carried there by momentum or by the pilot). A vehicle on the pad, or being
+  landed, is legitimately below `min_altitude_m` and is not reported as a breach. (Before
+  0.3.0 this field was `geofence_ok` and also covered a 10 m radius.)
+- `clamped` lists the reasons the last setpoint was modified: `max_altitude`,
+  `min_altitude`, `max_speed`.
 
 ---
 
@@ -328,7 +327,7 @@ ros2 topic hz /fmu/in/offboard_control_mode          # must be ~10 Hz
 ros2 topic hz /visual_slam/tracking/odometry         # must be ~30 Hz
 ros2 topic echo /skybeta/state --once
 ros2 topic echo /fmu/in/trajectory_setpoint          # what PX4 actually got
-ros2 param get /flight_interface geofence_radius_m
+ros2 param get /flight_interface max_altitude_m
 ros2 service call /skybeta/hold std_srvs/srv/Trigger # panic button
 ```
 
@@ -357,7 +356,7 @@ ros2 run competitor_advanced_cpp skybeta_goto_mode --ros-args \
 **Take the extra risk seriously:**
 
 - **No safety envelope.** The Python flight interface is not in this loop at all. There is no
-  geofence, no altitude clamp, no speed cap — whatever `updateSetpoint()` publishes goes
+  altitude clamp and no speed cap — whatever `updateSetpoint()` publishes goes
   to the controller. You own the envelope yourself.
 - **NED, not ENU. `+z` is DOWN.** `target_down_m: -1.5` means 1.5 m *up*. A sign error here
   puts the vehicle in the ground.
@@ -382,7 +381,7 @@ src/
 ├── skybeta_flight_interface/          do not modify
 │   ├── flight_interface.py            the 10 Hz heartbeat + the node
 │   ├── frames.py                      ENU<->NED / FLU<->FRD math
-│   ├── envelope.py                    the geofence / altitude / speed clamp
+│   ├── envelope.py                    the altitude / speed clamp
 │   ├── topics.py                      /fmu topic names vs px4_msgs MESSAGE_VERSION
 │   └── test/                          pytest; integration_offboard.py needs a DDS peer
 ├── competitor_example/                COPY THIS

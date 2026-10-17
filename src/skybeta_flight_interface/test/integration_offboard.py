@@ -8,8 +8,9 @@ cannot be tested without a live DDS graph:
 
   1. ``OffboardControlMode`` really arrives at >= 9 Hz on the wire (PX4 drops
      out of Offboard below ~2 Hz and refuses to enter it without the stream).
-  2. A pose setpoint outside the geofence comes back **clamped**, not dropped,
-     in the published ``TrajectorySetpoint``.
+  2. A pose setpoint above the ceiling comes back **clamped**, not dropped,
+     in the published ``TrajectorySetpoint``; its horizontal position (30 m
+     out, there is no geofence) passes through untouched.
 
 Not named ``test_*.py`` on purpose: it needs a DDS peer and several seconds,
 so it must not be swept up by the unit-test run.  Run it inside the container:
@@ -53,10 +54,11 @@ MEASURE_S = 4.0
 SETTLE_S = 2.0
 MIN_RATE_HZ = 9.0
 
-# 30 m out on a 3-4-5 bearing at 50 m up: both the radius and the ceiling.
+# 30 m out on a 3-4-5 bearing at 50 m up: over the ceiling, and far enough
+# out that the old 10 m geofence would have caught it.
 FAR_POSE_ENU = (18.0, 24.0, 50.0)
-# The default envelope clamps that to ENU (6, 8, 3) -> NED (8, 6, -3).
-EXPECTED_NED = (8.0, 6.0, -3.0)
+# Only the height is clamped: ENU (18, 24, 3) -> NED (24, 18, -3).
+EXPECTED_NED = (24.0, 18.0, -3.0)
 TOLERANCE_M = 0.01
 
 
@@ -184,7 +186,7 @@ def main():
                     f'heartbeat gap {max(gaps) * 1e3:.0f} ms > 500 ms '
                     '(PX4 would drop Offboard)')
 
-        # --- 2. geofence clamp on the wire ----------------------------
+        # --- 2. ceiling clamp on the wire, no horizontal clamp ---------
         harness.setpoints.clear()
         for _ in range(5):
             harness.send_far_pose()
@@ -214,12 +216,14 @@ def main():
             print(f'\n/skybeta/state: armed={state["armed"]} '
                   f'nav_state={state["nav_state_name"]} '
                   f'offboard_active={state["offboard_active"]} '
-                  f'geofence_ok={state["geofence_ok"]} '
+                  f'envelope_ok={state["envelope_ok"]} '
                   f'clamped={state["clamped"]}')
             if not state['offboard_active']:
                 failures.append('state did not report offboard_active')
-            if 'geofence_radius' not in state['clamped']:
-                failures.append('state did not report the geofence clamp')
+            if state['clamped'] != ['max_altitude']:
+                failures.append(
+                    f'state reported clamp {state["clamped"]}, '
+                    "expected ['max_altitude'] only")
     finally:
         node.terminate()
         try:
@@ -241,7 +245,7 @@ def main():
         for failure in failures:
             print(f'FAIL: {failure}')
         return 1
-    print('PASS: heartbeat rate, geofence clamp and /skybeta/state all good')
+    print('PASS: heartbeat rate, ceiling clamp and /skybeta/state all good')
     return 0
 
 

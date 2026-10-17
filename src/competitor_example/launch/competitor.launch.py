@@ -7,7 +7,7 @@ your own.
 
     ros2 launch competitor_example competitor.launch.py
     ros2 launch competitor_example competitor.launch.py \
-        geofence_radius_m:=6.0 max_altitude_m:=2.0 square_side_m:=3.0
+        max_altitude_m:=2.0 square_side_m:=3.0
 
 Set ``competitor:=false`` to bring up only the flight interface, e.g. to fly
 setpoints by hand from ``ros2 topic pub``.
@@ -22,8 +22,6 @@ from launch_ros.actions import Node
 # defaults, repeated here so a competitor can tighten them from one command
 # line without editing either package.
 ARGUMENTS = [
-    ('geofence_radius_m', '10.0',
-     'horizontal geofence radius about the odometry origin, metres'),
     ('max_altitude_m', '3.0', 'ceiling above the odometry origin, metres'),
     ('min_altitude_m', '0.3', 'floor above the odometry origin, metres'),
     ('max_speed_mps', '1.5', 'cap on the norm of a twist setpoint, m/s'),
@@ -33,7 +31,7 @@ ARGUMENTS = [
      'enable /skybeta/request_offboard. SIM ONLY: on a real vehicle the '
      'safety pilot selects Offboard on the RC switch'),
     ('odometry_topic', '/visual_slam/tracking/odometry',
-     'source of the ENU pose the geofence is measured against'),
+     'source of the ENU pose the altitude band is measured against'),
     ('hover_altitude_m', '1.5', 'example: hover height, metres'),
     ('hover_seconds', '5.0', 'example: seconds to hold the hover'),
     ('square_side_m', '5.0', 'example: side of the square, metres'),
@@ -56,7 +54,6 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         parameters=[{
-            'geofence_radius_m': LaunchConfiguration('geofence_radius_m'),
             'max_altitude_m': LaunchConfiguration('max_altitude_m'),
             'min_altitude_m': LaunchConfiguration('min_altitude_m'),
             'max_speed_mps': LaunchConfiguration('max_speed_mps'),

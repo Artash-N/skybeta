@@ -12,6 +12,10 @@ All quantities are in the ENU ``odom`` frame the competitor writes in, so the
 clamp happens *before* any frame conversion.  Altitude is measured from the
 origin captured at the first odometry sample, which for a vehicle sitting on
 the ground at startup is ground level.
+
+There is **no horizontal limit** (no geofence radius): it was removed for
+0.3.0. Horizontal position setpoints pass through untouched; only the
+altitude band and the speed cap are enforced here.
 """
 import math
 from dataclasses import dataclass, field
@@ -31,9 +35,8 @@ class Clamp:
 
 @dataclass
 class SafetyEnvelope:
-    """Cylinder around the odom origin, plus a speed cap.
+    """Altitude band above the odom origin, plus a speed cap.
 
-    geofence_radius_m  horizontal radius about the origin
     max_altitude_m     ceiling above the origin
     min_altitude_m     floor above the origin -- NOT a landing inhibit; the
                        pilot lands on RC, this only stops a competitor
@@ -41,18 +44,14 @@ class SafetyEnvelope:
     max_speed_mps      cap on the norm of a velocity setpoint
     """
 
-    geofence_radius_m: float = 10.0
     max_altitude_m: float = 3.0
     min_altitude_m: float = 0.3
     max_speed_mps: float = 1.5
 
     def __post_init__(self):
-        self.geofence_radius_m = float(self.geofence_radius_m)
         self.max_altitude_m = float(self.max_altitude_m)
         self.min_altitude_m = float(self.min_altitude_m)
         self.max_speed_mps = float(self.max_speed_mps)
-        if self.geofence_radius_m <= 0.0:
-            raise ValueError('geofence_radius_m must be > 0')
         if self.max_speed_mps <= 0.0:
             raise ValueError('max_speed_mps must be > 0')
         if self.min_altitude_m > self.max_altitude_m:
@@ -62,23 +61,12 @@ class SafetyEnvelope:
 
     # ------------------------------------------------------------------
     def clamp_position(self, position_enu, origin_enu=(0.0, 0.0, 0.0)):
-        """Clamp an ENU position into the cylinder around ``origin_enu``.
-
-        Horizontal excursions are scaled back onto the boundary along the
-        same bearing, so the commanded direction is preserved and only the
-        distance changes.  Altitude is clipped independently.
-        """
+        """Clamp the altitude of an ENU position into the band above
+        ``origin_enu``.  x and y are returned unchanged."""
         px, py, pz = (float(v) for v in position_enu)
         ox, oy, oz = (float(v) for v in origin_enu)
         dx, dy, dz = px - ox, py - oy, pz - oz
         reasons = []
-
-        radius = math.hypot(dx, dy)
-        if radius > self.geofence_radius_m:
-            if radius > 0.0:
-                scale = self.geofence_radius_m / radius
-                dx, dy = dx * scale, dy * scale
-            reasons.append('geofence_radius')
 
         if dz > self.max_altitude_m:
             dz = self.max_altitude_m
@@ -109,20 +97,19 @@ class SafetyEnvelope:
         return not self.clamp_position(position_enu, origin_enu).clamped
 
     def vehicle_inside(self, position_enu, origin_enu=(0.0, 0.0, 0.0)):
-        """True when the *vehicle* is within the radius and under the ceiling.
+        """True when the *vehicle* is under the ceiling.
 
-        Drives the ``geofence_ok`` field of /skybeta/state, so a competitor
-        can see the vehicle being carried out of bounds by momentum or by the
+        Drives the ``envelope_ok`` field of /skybeta/state, so a competitor
+        can see the vehicle being carried above it by momentum or by the
         pilot.  Unlike ``contains`` it ignores ``min_altitude_m``: that floor
         exists to stop a competitor commanding the vehicle into the ground,
         and a vehicle sitting on the pad -- or being landed by the pilot -- is
         legitimately below it.  Reporting that as a breach would make
-        ``geofence_ok`` false for the whole of every flight's start and end.
+        ``envelope_ok`` false for the whole of every flight's start and end.
         """
         reasons = self.clamp_position(position_enu, origin_enu).reasons
         return not [r for r in reasons if r != 'min_altitude']
 
     def describe(self):
-        return (f'radius {self.geofence_radius_m:.1f} m, '
-                f'altitude {self.min_altitude_m:.2f}-{self.max_altitude_m:.2f} m, '
+        return (f'altitude {self.min_altitude_m:.2f}-{self.max_altitude_m:.2f} m, '
                 f'speed <= {self.max_speed_mps:.2f} m/s')

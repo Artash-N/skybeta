@@ -25,7 +25,7 @@ canonical hardware/PX4 procedure; [`README.md`](README.md) for the container wor
   pipeline (agent, cuVSLAM, bridge) never sources that overlay.
 - **`src/`** — `oakd_vslam_bringup` (cuVSLAM launch + the PX4 odometry bridge),
   `skybeta_flight_interface` (the competitor-facing offboard wrapper: 10 Hz heartbeat, ENU↔NED,
-  geofence, **no arm path**), `competitor_example` (Python reference mission),
+  altitude + speed clamp, **no geofence** since 0.3.0, **no arm path**), `competitor_example` (Python reference mission),
   `competitor_advanced_cpp` (px4_ros2_cpp custom mode). Competitors add their own packages
   in the team workspace, not here.
 - **`px4/`** — pinned v1.16.2 firmware + staged parameter files; **`tools/`** — `param_diff.py`,

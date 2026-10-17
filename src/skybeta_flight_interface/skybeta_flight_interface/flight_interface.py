@@ -10,8 +10,9 @@ everything between those topics and PX4:
     the heartbeat runs from node start, before any competitor setpoint
     exists, and never stops.
   * the ENU/FLU -> NED/FRD conversion (``frames.py``).
-  * the safety envelope (``envelope.py``): geofence radius, altitude band and
-    speed cap, applied as a **clamp**, never a rejection.
+  * the safety envelope (``envelope.py``): altitude band and speed cap,
+    applied as a **clamp**, never a rejection.  There is no horizontal
+    geofence.
   * ``/fmu`` topic-name resolution against the installed px4_msgs, so the
     same source works on the 1.14 and 1.16 message generations
     (``topics.py``).
@@ -100,7 +101,6 @@ class FlightInterface(Node):
         super().__init__('flight_interface', **kwargs)
 
         # -- parameters ------------------------------------------------
-        self.declare_parameter('geofence_radius_m', 10.0)
         self.declare_parameter('max_altitude_m', 3.0)
         self.declare_parameter('min_altitude_m', 0.3)
         self.declare_parameter('max_speed_mps', 1.5)
@@ -123,7 +123,6 @@ class FlightInterface(Node):
         self.declare_parameter('odom_to_ned_yaw_offset_rad', 0.0)
 
         self.envelope = SafetyEnvelope(
-            geofence_radius_m=self.get_parameter('geofence_radius_m').value,
             max_altitude_m=self.get_parameter('max_altitude_m').value,
             min_altitude_m=self.get_parameter('min_altitude_m').value,
             max_speed_mps=self.get_parameter('max_speed_mps').value,
@@ -316,7 +315,7 @@ class FlightInterface(Node):
                 self.px4_origin_ned = (float(local.x), float(local.y),
                                        float(local.z))
             self.get_logger().info(
-                f'geofence origin captured at ENU '
+                f'envelope origin captured at ENU '
                 f'({position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f}); '
                 f'{self.envelope.describe()}')
             if self.anchor_setpoints and self.px4_origin_ned is None:
@@ -341,9 +340,9 @@ class FlightInterface(Node):
         if self.odom_origin_enu is None:
             self.warn_throttled(
                 'no_origin',
-                'no odometry yet, so the geofence origin is (0,0,0) and the '
-                'altitude band is measured from there - setpoints are still '
-                'clamped, just against an unverified origin.')
+                'no odometry yet, so the altitude band is measured from '
+                '(0,0,0) - setpoints are still clamped, just against an '
+                'unverified origin.')
         clamp = self.envelope.clamp_position(requested, origin)
         if clamp.clamped:
             self.warn_throttled(
@@ -540,9 +539,9 @@ class FlightInterface(Node):
         if local_ned is not None:
             local_enu = list(frames.ned_to_enu(local_ned))
 
-        geofence_ok = True
+        envelope_ok = True
         if self.odom_position_enu is not None:
-            geofence_ok = self.envelope.vehicle_inside(
+            envelope_ok = self.envelope.vehicle_inside(
                 self.odom_position_enu, self.odom_origin_enu or (0.0, 0.0, 0.0))
 
         status = self.vehicle_status
@@ -559,12 +558,11 @@ class FlightInterface(Node):
             'origin_enu': (list(self.odom_origin_enu)
                            if self.odom_origin_enu else None),
             'local_enu': local_enu,
-            'geofence_ok': geofence_ok,
+            'envelope_ok': envelope_ok,
             'setpoint_mode': self.mode,
             'clamped': list(self.last_clamp_reasons),
             'frozen': self.frozen,
             'envelope': {
-                'geofence_radius_m': self.envelope.geofence_radius_m,
                 'min_altitude_m': self.envelope.min_altitude_m,
                 'max_altitude_m': self.envelope.max_altitude_m,
                 'max_speed_mps': self.envelope.max_speed_mps,

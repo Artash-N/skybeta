@@ -3,6 +3,27 @@
 One entry per image version (`VERSION`, tag `skybeta:<VERSION>`). The evidence behind each
 change is in [`CLAUDE.md`](CLAUDE.md); this file says what changed and what you must do.
 
+## 0.3.0 — no geofence (2026-10-16, branch `fleet-ready`)
+
+### You must do this when moving a drone from 0.2.0
+
+1. **Rebuild or pull the image**: `skybeta:0.3.0` (`src/` changed). `fleetctl update` does both
+   the code and the image.
+2. **Team code that reads `/skybeta/state`**: `geofence_ok` is now `envelope_ok`, and
+   `envelope.geofence_radius_m` is gone. A launch file that still passes
+   `geofence_radius_m` to the flight interface is ignored, not an error.
+
+### Changed
+
+- **The horizontal geofence is removed from `skybeta_flight_interface`.** Position setpoints
+  are no longer pulled back to a 10 m radius about the odometry origin; x and y reach PX4
+  as written. The altitude band (`min_altitude_m` 0.3 / `max_altitude_m` 3.0) and the speed
+  cap (`max_speed_mps` 1.5) are unchanged, and so is the FC's own vertical limit
+  (`GF_MAX_VER_DIST` in each fixes file). Staying inside the flying area is now the team's
+  code and the safety pilot's job.
+- `/skybeta/state`: `geofence_ok` renamed `envelope_ok` (false only above the ceiling);
+  `clamped` can no longer contain `geofence_radius`.
+
 ## 0.2.0 — fleet-ready (2026-10-12, branch `fleet-ready`)
 
 Makes the stack safe to run on many drones sharing one WiFi network, with teams writing code

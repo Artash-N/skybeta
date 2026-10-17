@@ -51,7 +51,7 @@ OAK-D-S2  ──USB3──▶  depthai-ros v3 driver     /oak/{left,right}/image
                                                               │
                                                               ▼
                                                   skybeta_flight_interface
-                                        geofence + altitude + speed clamp,
+                                        altitude + speed clamp (no geofence),
                                         10 Hz OffboardControlMode heartbeat,
                                         ENU<->NED
                                                               │

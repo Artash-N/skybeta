@@ -113,8 +113,13 @@ pull_as() {
 if [[ ${SKIP_BASE} -eq 1 ]]; then
   echo "[pull] skipping NGC base (--skip-base)"
 else
-  echo "[pull] step 1/2: NGC base (public, ~40 GB — cached after the first drone)"
-  pull_as "${BASE_IMAGE}" "$(via_mirror "${BASE_IMAGE}")"
+  echo "[pull] step 1/2: NGC base (public, ~40 GB unpacked / ~12.6 GB transferred — cached after the first drone)"
+  # Not fatal: the skybeta image in $REGISTRY carries every base layer too (push_image.sh
+  # pushes the full manifest), so a drone with no route to nvcr.io -- an offline venue --
+  # still gets everything from $REGISTRY in step 2, just all of it from there.
+  if ! pull_as "${BASE_IMAGE}" "$(via_mirror "${BASE_IMAGE}")"; then
+    echo "[pull] WARNING: could not pull the NGC base; step 2 will fetch its layers from ${MIRROR:-${REGISTRY}} instead" >&2
+  fi
 fi
 
 REMOTE="${REGISTRY}/${IMAGE_NAME}:${TAG}"

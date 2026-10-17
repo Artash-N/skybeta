@@ -11,10 +11,12 @@
 # `latest` is never pushed. Drones pull a pinned tag (host/pull_image.sh) so a
 # fleet cannot silently split across image versions mid-competition.
 #
-# Layer dedup: the ~40 GB NGC base is a public image the drones pull straight
-# from nvcr.io. The registry still stores the full image, but the per-drone
-# transfer is only the ~1-2 GB skybeta delta because the base layers are already
-# on disk. Do NOT strip the base out of the push — the manifest needs it.
+# Layer dedup: the NGC base (40 GB unpacked, 12.6 GB compressed) is a public image
+# the drones pull straight from nvcr.io. The registry still stores the full image
+# (~13 GB), but the per-drone transfer is only the ~0.6 GB compressed skybeta delta
+# because the base layers are already on disk. Do NOT strip the base out of the
+# push: the manifest needs it, and an offline drone gets the base from here.
+# Any registry works; docs/distribution.md compares them.
 #
 # Log in first:
 #   echo "$GHCR_PAT" | docker login ghcr.io -u <user> --password-stdin

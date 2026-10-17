@@ -68,18 +68,6 @@ REGISTRY="${REGISTRY%/}"
 VERSION="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION")"
 [[ -n "${VERSION}" ]] || { echo "push_image.sh: VERSION is empty" >&2; exit 1; }
 
-GIT_SHA="nogit"
-if git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
-  GIT_SHA="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD)"
-  git -C "${REPO_ROOT}" diff --quiet HEAD -- 2>/dev/null || GIT_SHA="${GIT_SHA}-dirty"
-fi
-
-TAGS=(
-  "${VERSION}"
-  "${GIT_SHA}"
-  "${VERSION}-px4_${PX4_FIRMWARE}-isaacros_${ISAAC_ROS_VERSION}"
-)
-
 # Everything is pushed from the semver tag's image id, so all three remote tags
 # are guaranteed to be the same image even if a local tag drifted.
 SRC="${IMAGE_NAME}:${VERSION}"
@@ -89,6 +77,28 @@ if ! docker image inspect "${SRC}" >/dev/null 2>&1; then
 fi
 IMAGE_ID="$(docker image inspect "${SRC}" --format '{{.Id}}')"
 echo "[push] source ${SRC} (${IMAGE_ID})"
+
+# The git-sha tag names the commit the image was BUILT from, not whatever is
+# checked out now (the checkout moves on; a param or doc commit does not rebuild
+# the image). Source, in order: the io.skybeta.git-sha label build_image.sh
+# stamps, then the <sha> tag build_image.sh put on the same image id locally.
+# If neither exists the sha tag is skipped rather than guessed.
+GIT_SHA="$(docker image inspect "${SRC}" --format '{{index .Config.Labels "io.skybeta.git-sha"}}' 2>/dev/null || true)"
+[[ "${GIT_SHA}" == "<no value>" ]] && GIT_SHA=""
+if [[ -z "${GIT_SHA}" ]]; then
+  GIT_SHA="$(docker image ls "${IMAGE_NAME}" --format '{{.Tag}} {{.ID}}' 2>/dev/null \
+    | awk -v id="${IMAGE_ID#sha256:}" 'index(id, $2) == 1 && $1 ~ /^[0-9a-f]{12}(-dirty)?$/ {print $1; exit}')"
+fi
+
+TAGS=("${VERSION}")
+if [[ -n "${GIT_SHA}" ]]; then
+  echo "[push] built from commit ${GIT_SHA}"
+  TAGS+=("${GIT_SHA}")
+else
+  echo "[push] WARNING: cannot tell which commit ${SRC} was built from (no io.skybeta.git-sha" >&2
+  echo "[push]          label, no local <sha> tag) -- not pushing a git-sha tag" >&2
+fi
+TAGS+=("${VERSION}-px4_${PX4_FIRMWARE}-isaacros_${ISAAC_ROS_VERSION}")
 
 run() {
   if [[ ${DRY_RUN} -eq 1 ]]; then

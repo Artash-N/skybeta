@@ -86,8 +86,12 @@ echo "[push] source ${SRC} (${IMAGE_ID})"
 GIT_SHA="$(docker image inspect "${SRC}" --format '{{index .Config.Labels "io.skybeta.git-sha"}}' 2>/dev/null || true)"
 [[ "${GIT_SHA}" == "<no value>" ]] && GIT_SHA=""
 if [[ -z "${GIT_SHA}" ]]; then
-  GIT_SHA="$(docker image ls "${IMAGE_NAME}" --format '{{.Tag}} {{.ID}}' 2>/dev/null \
-    | awk -v id="${IMAGE_ID#sha256:}" 'index(id, $2) == 1 && $1 ~ /^[0-9a-f]{12}(-dirty)?$/ {print $1; exit}')"
+  # (bash regex, not awk: Ubuntu's default mawk has no {12} intervals)
+  while read -r tag id; do
+    if [[ "${IMAGE_ID#sha256:}" == "${id}"* && "${tag}" =~ ^[0-9a-f]{12}(-dirty)?$ ]]; then
+      GIT_SHA="${tag}"; break
+    fi
+  done < <(docker image ls "${IMAGE_NAME}" --format '{{.Tag}} {{.ID}}' 2>/dev/null)
 fi
 
 TAGS=("${VERSION}")

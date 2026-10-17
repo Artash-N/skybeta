@@ -103,9 +103,9 @@ pull_as() {
     return 0
   fi
   echo "[pull] docker pull ${source_ref}"
-  docker pull "${source_ref}"
+  docker pull "${source_ref}" || return 1   # explicit: set -e is off when called from an if
   if [[ "${source_ref}" != "${canonical}" ]]; then
-    docker tag "${source_ref}" "${canonical}"
+    docker tag "${source_ref}" "${canonical}" || return 1
     echo "[pull] retagged ${source_ref} -> ${canonical}"
   fi
 }

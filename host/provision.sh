@@ -87,9 +87,12 @@ assert_r36() {
 }
 
 # --- helpers ---------------------------------------------------------------
+# Live AND built from the stock DTB. A patched DTB made from another board's live
+# tree (golden-image clones of older images) boots, but with that board's CPU trim.
 uart_patch_live() {
   [[ -e /proc/device-tree/bus@0/serial@3100000/iommus ]] && \
-  [[ -e /proc/device-tree/bus@0/serial@3100000/dmas ]]
+  [[ -e /proc/device-tree/bus@0/serial@3100000/dmas ]] && \
+  bash "${HERE}/jetson_uart_dma_fix.sh" current >/dev/null 2>&1
 }
 
 maxn_pmode_id() {

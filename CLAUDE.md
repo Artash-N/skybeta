@@ -861,6 +861,31 @@ The competitor guide documented `COMPETITOR_PKG=my_team_nav host/run.sh stack`, 
 never passed either variable into `docker run`, so the stack always launched
 `competitor_example`. Now forwarded (and settable in `drone.env`).
 
+### 16. FIXED (2026-10-20) — patched UART DTB carried the golden board's CPU trim
+
+**How it presented:** drone 16 (a massflash clone of drone 15) ran with `nproc` = 4,
+`/sys/devices/system/cpu/possible` = `0-3`, and both `nvpmodel.service` and
+`skybeta-jetson-clocks.service` failed at boot ("failed to read PARAM CPU_A78_4 ... NVPM
+ERROR: failed to set power mode!"), so no MAXN_SUPER and no max clocks.
+
+**Root cause:** each Orin Nano chip has a different 6 of the T234's 12 A78 cores enabled, and
+UEFI trims the DTB it boots to the chip's fuses. `jetson_uart_dma_fix.sh apply` built
+`/boot/dtb/uart_dma_fix.dtb` from `/sys/firmware/devicetree/base`, i.e. the tree UEFI had
+already trimmed for drone 15 (`cpu@0..300`, `cpu@10200`, `cpu@10300`). On drone 16 UEFI removed
+`cpu@10200/10300` (fused off there) and its real cores were not in the file, leaving 4. The
+stock `kernel_tegra234-p3768-0000+p3767-0005-nv-super.dtb` has all 12 cpu nodes.
+
+**Fix:** `apply` now patches the stock kernel DTB (`BASE_DTB=` overrides), verifies the staged
+DTB keeps every stock cpu node, and treats a DTB with fewer cpu nodes as stale (`already_applied`
+and the new no-root `current` mode), so `provision.sh`'s `uart_patch` phase re-runs on old
+clones. The result differs from stock only by `iommus = <0x04 0x04>` on `serial@3100000`.
+Verified on drone 16: one reboot, `nproc` 6, MAXN_SUPER, clocks pinned, UART still in its
+IOMMU group. Rebooting the Jetson trips bug #15, so power-cycle the FC afterwards.
+Also verified 2026-10-25 on drone 15 (rebuilt from stock: 12 cpu nodes, byte-identical to drone
+16's file, still 6 cores after reboot) and on a fresh clone of the corrected image (6 cores,
+MAXN_SUPER, no manual step). Older clones still carry the bad DTB: check `nproc`, and if it is
+4 run `sudo host/jetson_uart_dma_fix.sh apply`, reboot, then power-cycle the FC.
+
 ## Gotchas when working here
 
 - The image is **aarch64-only** — the NGC Isaac ROS base publishes no amd64 manifest.

@@ -7,6 +7,13 @@ PATCHED_DTB="/boot/dtb/uart_dma_fix.dtb"
 EXTLINUX="/boot/extlinux/extlinux.conf"
 BACKUP_EXTLINUX="/boot/extlinux/extlinux.conf.jetson_uart_dma_iommu_universal.bak"
 ACTIVE_DTB_BACKUP="/boot/dtb/uart_dma_fix.preexisting.bak"
+# The patch is applied to the board's STOCK kernel DTB, never to the live tree.
+# UEFI trims the DTB it boots for each chip's fused-off units (which 6 of the 12
+# A78 cores exist differs per Orin Nano chip). A patched DTB built from the live
+# tree bakes in the trim of the board it was made on; a golden-image clone with
+# a different core set then boots with only 4 cores and nvpmodel fails
+# (found 2026-10-20 on drone 16, cloned from 15). Override with BASE_DTB=<file>.
+DTB_DIR="/boot/dtb"
 SID_GPCDMA_HEX="0x04"
 UART_NODE="serial@3100000"
 
@@ -22,6 +29,7 @@ Usage:
   sudo $SCRIPT_NAME apply [--reboot] [--force]
        $SCRIPT_NAME apply --dry-run            # no root; shows the extlinux diff
   sudo $SCRIPT_NAME status
+       $SCRIPT_NAME current                    # exit 0 if $PATCHED_DTB is built from the stock DTB
   sudo $SCRIPT_NAME restore [--reboot]
        $SCRIPT_NAME rewrite-extlinux <file> <dtb-path>   # helper, used by tests
 
@@ -29,7 +37,10 @@ Purpose:
   Patch Jetson Orin / tegra234 UARTA serial@3100000 for the R36.5 UART DMA/IOMMU issue.
 
 What apply does:
-  - Dumps the live device tree from /sys/firmware/devicetree/base
+  - Decompiles the board's stock kernel DTB ($DTB_DIR/kernel_tegra234-*.dtb, or BASE_DTB=...).
+    Not the live tree: UEFI trims the booted DTB per chip (CPU cores and other
+    fused-off units), so a DTB built from the live tree only fits the board it
+    was made on -- a golden-image clone would boot with 4 of its 6 cores.
   - Locates serial@3100000
   - Ensures the node has:
       dma-names = "rx", "tx";
@@ -41,8 +52,11 @@ What apply does:
 
 Idempotency:
   - apply is a no-op (exit 0) when the patch is already live: the running device
-    tree carries serial@3100000/iommus, $PATCHED_DTB exists, and extlinux.conf
-    has exactly one FDT line, pointing at it. Use --force to rewrite anyway.
+    tree carries serial@3100000/iommus, $PATCHED_DTB exists and was built from
+    the stock DTB (same /cpus node count), and extlinux.conf has exactly one FDT
+    line, pointing at it. Use --force to rewrite anyway.
+  - A $PATCHED_DTB built from the live tree by older versions of this script
+    (fewer /cpus nodes than the stock DTB) is rebuilt; reboot afterwards.
   - If the patch is live but extlinux.conf has duplicate FDT lines (left by old
     versions of this script), apply rewrites extlinux.conf only -- backup first,
     DTB untouched, no reboot needed.
@@ -96,6 +110,52 @@ dump_live_dts() {
   ACTIVE_DTS="$WORKDIR/active.dts"
   dtc -I fs -O dts -o "$ACTIVE_DTS" /sys/firmware/devicetree/base >/dev/null 2>&1 || \
     die "Failed to dump live device tree"
+}
+
+# The stock kernel DTB this board boots without the patch. Exactly one
+# kernel_tegra234-*.dtb ships in $DTB_DIR on a JetPack install; BASE_DTB overrides.
+stock_dtb() {
+  if [[ -n "${BASE_DTB:-}" ]]; then
+    [[ -f "$BASE_DTB" ]] || die "BASE_DTB=$BASE_DTB does not exist"
+    echo "$BASE_DTB"; return 0
+  fi
+  local found=()
+  shopt -s nullglob
+  found=("$DTB_DIR"/kernel_tegra234-*.dtb)
+  shopt -u nullglob
+  [[ ${#found[@]} -eq 1 ]] || \
+    die "Expected exactly one stock $DTB_DIR/kernel_tegra234-*.dtb, found ${#found[@]}: ${found[*]:-none}. Pass BASE_DTB=<file>."
+  echo "${found[0]}"
+}
+
+# Number of cpu@ nodes under /cpus in a DTB file (fdtget if present, else dtc).
+dtb_cpu_count() {
+  if command -v fdtget >/dev/null 2>&1; then
+    fdtget -l "$1" /cpus 2>/dev/null | grep -c '^cpu@' || true
+  else
+    dtc -I dtb -O dts "$1" 2>/dev/null | grep -cE '^[[:space:]]*cpu@[0-9a-f]+ \{' || true
+  fi
+}
+
+# True when $PATCHED_DTB was built from the full stock DTB rather than a live
+# (per-chip trimmed) tree. Readable without root.
+patched_dtb_is_current() {
+  [[ -f "$PATCHED_DTB" ]] || return 1
+  local stock n_stock n_patched
+  stock="$(stock_dtb 2>/dev/null)" || return 1
+  n_stock="$(dtb_cpu_count "$stock")"
+  n_patched="$(dtb_cpu_count "$PATCHED_DTB")"
+  [[ -n "$n_stock" && "$n_stock" -gt 0 && "$n_patched" == "$n_stock" ]]
+}
+
+dump_stock_dts() {
+  ACTIVE_DTS="$WORKDIR/active.dts"
+  STOCK_DTB="$(stock_dtb)"
+  [[ "$(readlink -f "$STOCK_DTB")" != "$(readlink -f "$PATCHED_DTB")" ]] || \
+    die "BASE_DTB points at $PATCHED_DTB itself; use the stock kernel DTB"
+  log "base DTB: $STOCK_DTB ($(dtb_cpu_count "$STOCK_DTB") cpu nodes; UEFI trims them per chip at boot)"
+  dtc -I dtb -O dts -o "$ACTIVE_DTS" "$STOCK_DTB" >/dev/null 2>&1 || \
+    die "Failed to decompile $STOCK_DTB"
 }
 
 python_helper() { python3 - "$@"; }
@@ -374,6 +434,7 @@ update_extlinux_to_use_patched_dtb() {
 already_applied() {
   [[ -e /proc/device-tree/bus@0/serial@3100000/iommus ]] || return 1
   [[ -f "$PATCHED_DTB" ]]                                || return 1
+  patched_dtb_is_current                                 || return 1
   [[ -f "$EXTLINUX" ]]                                   || return 1
   grep -qE "^[[:space:]]*FDT[[:space:]]+${PATCHED_DTB}[[:space:]]*$" "$EXTLINUX" || return 1
   return 0
@@ -415,6 +476,9 @@ if missing:
 print("Verified staged DTB: serial@3100000 has dmas, dma-names, and iommus.")
 print(json.dumps(s, indent=2))
 PY
+  patched_dtb_is_current || \
+    die "Verification failed: $PATCHED_DTB has $(dtb_cpu_count "$PATCHED_DTB") cpu nodes, stock has $(dtb_cpu_count "$(stock_dtb)")"
+  log "Verified staged DTB keeps all $(dtb_cpu_count "$PATCHED_DTB") stock cpu nodes (UEFI trims per chip)."
 }
 
 status_report() {
@@ -424,6 +488,14 @@ status_report() {
   local state_json="$WORKDIR/live_state.json"
   summarize_dts_to_json "$ACTIVE_DTS" > "$state_json"
 
+  echo "=== patched DTB base ==="
+  if patched_dtb_is_current; then
+    echo "$PATCHED_DTB built from the stock DTB ($(dtb_cpu_count "$PATCHED_DTB") cpu nodes) -- OK on any board"
+  elif [[ -f "$PATCHED_DTB" ]]; then
+    echo "STALE: $PATCHED_DTB has $(dtb_cpu_count "$PATCHED_DTB") cpu nodes, stock has $(dtb_cpu_count "$(stock_dtb)") -- built from a live tree; run: sudo $SCRIPT_NAME apply, then reboot"
+  fi
+  echo "online CPUs: $(cat /sys/devices/system/cpu/online 2>/dev/null)"
+  echo
   echo "=== extlinux FDT lines ==="
   [[ -f "$EXTLINUX" ]] && grep -nE '^LABEL |^[[:space:]]*FDT |^[[:space:]]*LINUX ' "$EXTLINUX" || true
   echo
@@ -475,7 +547,7 @@ apply_fix() {
   ensure_tools
   assert_supported_platform
   make_workdir
-  dump_live_dts
+  dump_stock_dts
 
   local pre_json="$WORKDIR/pre_state.json"
   summarize_dts_to_json "$ACTIVE_DTS" > "$pre_json"
@@ -499,6 +571,13 @@ main() {
 
   case "$mode" in
     apply|status|restore) shift ;;
+    current)
+      # No root needed: used by provision.sh to decide whether uart_patch must re-run.
+      if patched_dtb_is_current; then
+        log "$PATCHED_DTB is built from the stock DTB"; exit 0
+      fi
+      log "$PATCHED_DTB missing or built from a live (per-chip) tree"; exit 1
+      ;;
     rewrite-extlinux)
       # Helper entry point for host/tests/test_extlinux_fix.sh. Rewrites the
       # given file in place; never touches /boot unless you point it there.

@@ -8,8 +8,8 @@
  * ------------------------------------------------
  * The Python track (skybeta_flight_interface + competitor_example) drives
  * PX4's built-in Offboard mode: your node streams setpoints, the safety pilot
- * flips the RC switch to Offboard, and the flight interface clamps everything
- * you ask for to the safety envelope first.
+ * arms in Position, and the flight interface enters Offboard and clamps
+ * everything you ask for to the safety envelope first.
  *
  * This is different. px4_ros2_cpp registers a *new flight mode* with PX4 over
  * uXRCE-DDS. Once registered it appears in QGroundControl's mode list and can

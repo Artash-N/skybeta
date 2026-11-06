@@ -205,17 +205,18 @@ when the FC is unpowered or the cable is the suspect one (§1.1), and `oakd-usb`
 
 ## 4. RC and the safety pilot's controls
 
-There is **always a safety pilot on RC**. The flight interface has no arm path and never
-changes mode; the pilot arms, the pilot selects Offboard, and the pilot can take the
-vehicle back at any instant. Nothing in the software substitutes for these checks.
+There is **always a safety pilot on RC**. The flight interface has no arm path. The pilot selects
+Position and arms, the interface then enters Offboard, and the pilot can take the vehicle back at
+any instant with the sticks or the mode switch. Nothing in the software substitutes for these checks.
 
 - [ ] Receiver **bound** to this vehicle's transmitter, and the transmitter's model
       memory is the right one. Ten identical airframes make this an easy mistake.
 - [ ] Radio calibration done **on this airframe** (QGC → Radio). It is per
       transmitter+receiver pair and is deliberately excluded from
       [`00_baseline.params`](../px4/params/00_baseline.params).
-- [ ] Mode switch assigned, and the pilot knows which position is Offboard.
-      `RC_MAP_FLTMODE` on the reference airframe is channel 6.
+- [ ] Mode switch assigned, and the pilot knows which position is Position.
+      `RC_MAP_FLTMODE` is channel 6: Manual, Altitude, Position. There is no Offboard position.
+- [ ] Take-over practised with props off: throttle up from low, then the mode switch to Altitude.
 - [ ] **Kill switch assigned and physically tested** — motors off, then arm, confirm the
       switch disarms, then disarm. `RC_MAP_KILL_SW` on the reference airframe is
       channel 7. Test it before every session, not once at build time.
@@ -241,14 +242,13 @@ Ordered so a failure stops you before the props spin.
        - [ ] `/skybeta/state` shows `px4_link: true`
        - [ ] `/visual_slam/tracking/odometry` publishing, and `odom_enu` moves sensibly
              when you carry the vehicle
-       - [ ] your node is publishing `/skybeta/setpoint/pose` **before** the pilot
-             touches the mode switch
+       - [ ] your node is publishing `/skybeta/setpoint/pose` **before** the pilot arms
 7. [ ] `record_bag.sh` (or `host/run.sh bag`) started. Record every flight — it is the
        only way to explain a bad one afterwards, and it costs nothing on a good one.
 8. [ ] Kill switch tested this session (§4).
 9. [ ] Safety pilot has the transmitter, is standing clear, and has said so out loud.
-10. [ ] Pilot arms, takes off manually, establishes a stable hover at ~1.5 m, **then**
-        flips to Offboard.
+10. [ ] Pilot selects Position and arms, throttle low. Team code takes off from here, so be ready
+        to raise the throttle to take over (competitor guide §4).
 
 ---
 

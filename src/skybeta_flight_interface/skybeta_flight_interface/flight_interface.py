@@ -19,13 +19,15 @@ everything between those topics and PX4:
 
 What it deliberately does NOT do
 --------------------------------
-**It never arms, and it never changes flight mode on its own.**  A safety
-pilot on RC arms the vehicle and flips the mode switch into Offboard; that is
-the entire safety model of this competition and no software path may bypass
-it.  The optional ``/skybeta/request_offboard`` service sends
-``VEHICLE_CMD_DO_SET_MODE(1, 6)`` only when the ``allow_mode_request``
-parameter is explicitly set true, and it is **false by default and intended
-for SITL**.  There is no arm service at all.
+**It never arms.**  There is no arm service at all: the safety pilot on RC arms
+the vehicle, and that is the go signal.  With ``auto_offboard_on_arm`` set, an
+arming in Position is followed by one request for Offboard (``auto_offboard.py``
+has the rules).  The pilot takes the vehicle back with the mode switch or the
+sticks (``COM_RC_OVERRIDE`` = 3), and nothing here requests Offboard again until
+it has been disarmed.  The optional ``/skybeta/request_offboard`` service sends
+the same ``VEHICLE_CMD_DO_SET_MODE(1, 6)`` on demand, only when the
+``allow_mode_request`` parameter is explicitly set true, and it is **false by
+default and intended for SITL**.
 
 Setpoint semantics
 ------------------
@@ -67,10 +69,13 @@ from px4_msgs.msg import (
 )
 
 from skybeta_flight_interface import frames
+from skybeta_flight_interface.auto_offboard import AutoOffboard, Inputs
 from skybeta_flight_interface.envelope import SafetyEnvelope
 from skybeta_flight_interface.topics import px4_msgs_msg_dir, resolve_endpoints
 
 NAN = float('nan')
+#: vehicle_status arrives at about 5 Hz, so this is several missed messages.
+STATUS_TIMEOUT_S = 2.0
 
 #: PX4 custom main mode for Offboard, the ``param2`` of DO_SET_MODE(1, 6).
 PX4_CUSTOM_MAIN_MODE_OFFBOARD = 6.0
@@ -108,6 +113,7 @@ class FlightInterface(Node):
         self.declare_parameter('state_rate_hz', 5.0)
         self.declare_parameter('setpoint_timeout_s', 1.0)
         self.declare_parameter('allow_mode_request', False)
+        self.declare_parameter('auto_offboard_on_arm', False)
         self.declare_parameter('odometry_topic',
                                '/visual_slam/tracking/odometry')
         self.declare_parameter('pose_setpoint_topic', '/skybeta/setpoint/pose')
@@ -133,6 +139,9 @@ class FlightInterface(Node):
             self.get_parameter('setpoint_timeout_s').value)
         self.allow_mode_request = bool(
             self.get_parameter('allow_mode_request').value)
+        self.auto_offboard = AutoOffboard(
+            self.get_parameter('auto_offboard_on_arm').value,
+            self.setpoint_timeout_s)
         self.target_system = int(self.get_parameter('target_system').value)
         self.warn_period_s = float(self.get_parameter('warn_period_s').value)
         self.anchor_setpoints = bool(
@@ -157,6 +166,7 @@ class FlightInterface(Node):
         self.px4_origin_ned = None      # captured with the odom origin
         self.local_position = None
         self.vehicle_status = None
+        self.last_status_time = None
         self._last_warn_time = {}
         self._expiry_logged = False
 
@@ -232,10 +242,11 @@ class FlightInterface(Node):
             f'  resolved topics:\n    {topic_map}\n'
             f'  mode requests: '
             f'{"ENABLED (sim only!)" if self.allow_mode_request else "disabled"}'
+            f'\n  Offboard after arming in Position: '
+            f'{"ON" if self.auto_offboard.enabled else "off"}'
         )
         self.get_logger().info(
-            'This node never arms and never changes mode by itself. The '
-            'safety pilot arms and selects Offboard on the RC switch.')
+            'This node never arms: the safety pilot does, on RC.')
 
     # ------------------------------------------------------------------
     # helpers
@@ -255,6 +266,12 @@ class FlightInterface(Node):
             return
         self._last_warn_time[key] = now
         self.get_logger().warn(message)
+
+    @property
+    def px4_link(self):
+        """vehicle_status is still arriving, not merely that it once did."""
+        return (self.last_status_time is not None
+                and self.now_s() - self.last_status_time <= STATUS_TIMEOUT_S)
 
     @property
     def offboard_active(self):
@@ -282,6 +299,7 @@ class FlightInterface(Node):
     def status_cb(self, msg):
         previous = self.vehicle_status
         self.vehicle_status = msg
+        self.last_status_time = self.now_s()
         if previous is None:
             self.get_logger().info(
                 f'PX4 link up: nav_state={msg.nav_state} '
@@ -429,16 +447,25 @@ class FlightInterface(Node):
         return response
 
     def request_offboard_cb(self, request, response):
-        """Ask PX4 for Offboard. Disabled by default; SITL convenience only."""
+        """Ask PX4 for Offboard on demand. Off by default; for SITL."""
         del request
         if not self.allow_mode_request:
             response.success = False
             response.message = (
-                'refused: allow_mode_request is false. On a real vehicle the '
-                'safety pilot selects Offboard on the RC switch; this service '
-                'exists for SITL only.')
+                'refused: allow_mode_request is false. On a real vehicle '
+                'Offboard follows the pilot arming in Position '
+                '(auto_offboard_on_arm); this service exists for SITL only.')
             self.get_logger().warn(response.message)
             return response
+        self._send_offboard_command()
+        response.success = True
+        response.message = (
+            'sent VEHICLE_CMD_DO_SET_MODE(1, 6). This does NOT arm; PX4 will '
+            'reject it unless the offboard stream is already running.')
+        self.get_logger().warn(f'offboard mode requested - {response.message}')
+        return response
+
+    def _send_offboard_command(self):
         command = VehicleCommand()
         command.timestamp = self.now_us()
         command.command = VehicleCommand.VEHICLE_CMD_DO_SET_MODE
@@ -450,12 +477,28 @@ class FlightInterface(Node):
         command.source_component = 1
         command.from_external = True
         self.command_pub.publish(command)
-        response.success = True
-        response.message = (
-            'sent VEHICLE_CMD_DO_SET_MODE(1, 6). This does NOT arm; PX4 will '
-            'reject it unless the offboard stream is already running.')
-        self.get_logger().warn(f'offboard mode requested - {response.message}')
-        return response
+
+    def _step_auto_offboard(self):
+        status = self.vehicle_status
+        age = None
+        if self.last_setpoint_time is not None:
+            age = self.now_s() - self.last_setpoint_time
+        request, message = self.auto_offboard.step(Inputs(
+            now_s=self.now_s(),
+            link=self.px4_link,
+            armed=self.armed,
+            in_position=bool(
+                status is not None and status.nav_state
+                == VehicleStatus.NAVIGATION_STATE_POSCTL),
+            offboard=self.offboard_active,
+            position_valid=self._current_local_ned() is not None,
+            setpoint_age_s=age,
+            frozen=self.frozen,
+        ))
+        if message:
+            self.get_logger().warn(f'auto offboard: {message}')
+        if request:
+            self._send_offboard_command()
 
     # ------------------------------------------------------------------
     # the 10 Hz loop
@@ -531,6 +574,7 @@ class FlightInterface(Node):
         # fields of the setpoint it is allowed to look at.
         self.offboard_pub.publish(control)
         self.setpoint_pub.publish(setpoint)
+        self._step_auto_offboard()
 
     # ------------------------------------------------------------------
     def publish_state(self):
@@ -548,7 +592,7 @@ class FlightInterface(Node):
         nav_state = int(status.nav_state) if status is not None else -1
         state = {
             'stamp': round(self.now_s(), 3),
-            'px4_link': status is not None,
+            'px4_link': self.px4_link,
             'armed': self.armed,
             'nav_state': nav_state,
             'nav_state_name': NAV_STATE_NAMES.get(nav_state, str(nav_state)),

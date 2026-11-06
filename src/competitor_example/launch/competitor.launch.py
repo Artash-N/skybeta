@@ -28,8 +28,11 @@ ARGUMENTS = [
     ('setpoint_rate_hz', '10.0',
      'OffboardControlMode heartbeat rate -- PX4 needs > 2 Hz'),
     ('allow_mode_request', 'false',
-     'enable /skybeta/request_offboard. SIM ONLY: on a real vehicle the '
-     'safety pilot selects Offboard on the RC switch'),
+     'enable /skybeta/request_offboard. SIM ONLY: on a real vehicle Offboard '
+     'follows the pilot arming in Position'),
+    ('auto_offboard_on_arm', 'true',
+     'enter Offboard once when the pilot arms in Position. false: the vehicle '
+     'stays in Position under the pilot'),
     ('odometry_topic', '/visual_slam/tracking/odometry',
      'source of the ENU pose the altitude band is measured against'),
     ('hover_altitude_m', '1.5', 'example: hover height, metres'),
@@ -59,6 +62,7 @@ def generate_launch_description():
             'max_speed_mps': LaunchConfiguration('max_speed_mps'),
             'setpoint_rate_hz': LaunchConfiguration('setpoint_rate_hz'),
             'allow_mode_request': LaunchConfiguration('allow_mode_request'),
+            'auto_offboard_on_arm': LaunchConfiguration('auto_offboard_on_arm'),
             'odometry_topic': LaunchConfiguration('odometry_topic'),
         }],
     )

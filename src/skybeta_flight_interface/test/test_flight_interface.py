@@ -318,6 +318,78 @@ def test_hold_freezes_the_last_safe_position(node):
     assert list(node.setpoints.last.position) == pytest.approx([2.0, 1.0, -3.0])
 
 
+def test_px4_link_goes_false_when_status_stops(node):
+    assert node.px4_link is False                  # never heard from PX4
+    node.status_cb(make_status())
+    assert node.px4_link is True
+    node.last_status_time -= 10.0                  # silent for 10 s
+    assert node.px4_link is False
+    node.publish_state()
+    assert json.loads(node.states.last.data)['px4_link'] is False
+
+
+def auto_node():
+    n = FlightInterface(parameter_overrides=[
+        Parameter('auto_offboard_on_arm', Parameter.Type.BOOL, True)])
+    n.commands = Recorder()
+    n.offboard_pub.publish = Recorder()
+    n.setpoint_pub.publish = Recorder()
+    n.command_pub.publish = n.commands
+    return n
+
+
+def fly_to_arming(n, position_mode=True, setpoint=True):
+    position = VehicleStatus.NAVIGATION_STATE_POSCTL
+    n.status_cb(make_status(position, VehicleStatus.ARMING_STATE_DISARMED))
+    n.local_position_cb(make_local_position(0.0, 0.0, 0.0))
+    n.odometry_cb(make_odometry(0.0, 0.0, 0.0))
+    n.tick()
+    if setpoint:
+        n.pose_setpoint_cb(make_pose(0.0, 0.0, 1.0))
+    mode = position if position_mode else VehicleStatus.NAVIGATION_STATE_ALTCTL
+    n.status_cb(make_status(mode, VehicleStatus.ARMING_STATE_ARMED))
+    n.tick()
+
+
+def test_arming_in_position_sends_do_set_mode(ros):
+    n = auto_node()
+    try:
+        fly_to_arming(n)
+        assert len(n.commands.messages) == 1
+        command = n.commands.messages[0]
+        assert command.command == VehicleCommand.VEHICLE_CMD_DO_SET_MODE
+        assert command.param2 == 6.0
+    finally:
+        n.destroy_node()
+
+
+def test_arming_elsewhere_or_without_team_code_stays_out(ros):
+    for kw in ({'position_mode': False}, {'setpoint': False}):
+        n = auto_node()
+        try:
+            fly_to_arming(n, **kw)
+            assert n.commands.messages == []
+        finally:
+            n.destroy_node()
+
+
+def test_auto_offboard_is_off_unless_asked_for(node):
+    fly_to_arming(node)
+    assert node.commands.messages == []
+
+
+def test_no_arm_command_is_ever_sent(ros):
+    n = auto_node()
+    try:
+        fly_to_arming(n)
+        for _ in range(30):
+            n.tick()
+        assert all(c.command != VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM
+                   for c in n.commands.messages)
+    finally:
+        n.destroy_node()
+
+
 def test_request_offboard_is_refused_by_default(node):
     response = node.request_offboard_cb(Trigger.Request(), Trigger.Response())
     assert response.success is False

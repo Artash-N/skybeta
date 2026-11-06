@@ -30,11 +30,12 @@ command one.
 
 Safety
 ------
-The safety pilot arms and flips the RC switch into Offboard, and can take the
-vehicle back at any moment by flipping it out.  This node must therefore
-**wait** until ``/skybeta/state`` reports ``offboard_active`` before it starts
-commanding anything, and it stops advancing the mission if Offboard is lost.
-It does not attempt to get Offboard back -- that is the pilot's decision.
+The safety pilot selects Position and arms; the flight interface then enters
+Offboard, and this node takes off from the ground.  The pilot can take the
+vehicle back at any moment with the mode switch or the sticks.  This node must
+therefore **wait** until ``/skybeta/state`` reports ``offboard_active`` before
+it starts the mission, and it stops advancing if Offboard is lost.  It does not
+attempt to get Offboard back -- that is the pilot's decision.
 
 Tuning knobs are ROS parameters; nothing is hard-coded in the state machine.
 """
@@ -100,7 +101,7 @@ class SquareMission(Node):
             f'competitor_example ready: hover {self.hover_altitude:.2f} m for '
             f'{self.hover_seconds:.0f} s, then a {self.side:.1f} m square '
             f'(arrive within {self.arrival_radius:.2f} m).\n'
-            'Waiting for the safety pilot to select Offboard...')
+            'Waiting for the safety pilot to arm in Position...')
 
     # ------------------------------------------------------------------
     # inputs
@@ -214,9 +215,10 @@ class SquareMission(Node):
             self.info_once(
                 'waiting',
                 'holding at the current position until the safety pilot '
-                'selects Offboard.')
-            # Command where we already are, so the moment the pilot flips the
-            # switch the vehicle holds instead of jumping to a stale target.
+                'arms in Position.')
+            # Command where we already are, so the moment Offboard starts the
+            # vehicle holds instead of jumping to a stale target. This stream is
+            # also what lets the flight interface enter Offboard at all.
             self.send(*self.position)
             return
         self.start = self.position

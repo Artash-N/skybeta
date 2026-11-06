@@ -61,6 +61,14 @@ git clone https://github.com/<you>/<your-repo>.git
 A GitHub fork of a public repository is public, so other teams can read it. If you want your
 code private, create a new private repository and push your packages there.
 
+### Change PX4 parameters at your own risk
+
+You may change the PX4 parameters on your drone, but **it is at your own risk, and anything that
+happens as a result is your responsibility.** The drone ships with parameters set for this
+airframe. Changing `UXRCE_DDS_*`, `MAV_1_CONFIG`, `SER_TEL2_BAUD` or `EKF2_*` can cut the link to
+the Jetson or stop the drone using vision for position. Write down what you change and its old
+value.
+
 ### Keep the drone flying safely
 
 - **A safety pilot on RC is always there**, and can take the vehicle back at any time. Nothing

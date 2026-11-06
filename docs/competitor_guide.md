@@ -429,7 +429,7 @@ Goto" that flies to a parameterised NED target using `GotoSetpointType`.
 Once registered it appears in QGroundControl's mode list, and PX4's commander runs its arming
 checks against it. **Nothing selects it as shipped:** the arm-then-autonomy flow in §4 enters
 Offboard, not your mode, and the transmitter's mode switch holds Manual, Altitude and Position.
-Getting a mode onto the switch is a parameter change on the FC, so talk to the organisers first.
+Getting a mode onto the switch is a parameter change on the FC, which is [at your own risk](../README.md#change-px4-parameters-at-your-own-risk).
 
 ```bash
 ros2 run competitor_advanced_cpp skybeta_goto_mode --ros-args \

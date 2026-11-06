@@ -337,7 +337,7 @@ in a team image instead, layered on the pinned skybeta base:
 host/run.sh build --init     # writes ~/team_ws/Dockerfile + .dockerignore
 # edit ~/team_ws/Dockerfile: RUN apt-get install ... / RUN pip3 install ...
 host/run.sh build            # builds skybeta-team:<VERSION>
-host/run.sh stack            # uses the team image automatically from now on
+docker rm -f skybeta-stack   # restart the stack: it uses the team image from now on
 ```
 
 When the organisers roll out a new skybeta version, run `host/run.sh build` again: the team

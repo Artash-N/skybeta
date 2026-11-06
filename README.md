@@ -104,8 +104,11 @@ cd skybeta
 # 1. Check the machine is healthy.
 host/doctor.sh
 
-# 2. Run the stack. The camera mount pose comes from drone.env; positional arguments
-#    override it: x y z (m) roll pitch yaw (rad), FLU, Pixhawk primary IMU -> left lens.
+# 2. The stack starts by itself at power-up on a fleet drone. Look at it:
+docker exec -it skybeta-stack tmux attach -t skybeta   # Ctrl-b d to leave
+
+# Only on a drone without autostart (run.sh refuses a second stack). Positional arguments
+# override drone.env's camera pose: x y z (m) roll pitch yaw (rad), FLU, Pixhawk IMU -> left lens.
 host/run.sh stack
 ```
 
@@ -129,10 +132,10 @@ src/competitor_example/competitor_example/square_mission.py    <- copy this pack
 It is a heavily commented Python node that waits for Offboard, captures a start pose,
 publishes ENU setpoints on a timer, checks arrival, and notices when the pilot takes over.
 Copy it into `~/team_ws/src/my_team_nav`, rename the package, and point the launcher at it:
-in `/etc/skybeta/drone.env` (`COMPETITOR_PKG=`, `COMPETITOR_LAUNCH=`), or for one run:
+in `/etc/skybeta/drone.env` (`COMPETITOR_PKG=`, `COMPETITOR_LAUNCH=`), then restart the stack:
 
 ```bash
-COMPETITOR_PKG=my_team_nav COMPETITOR_LAUNCH=my_mission.launch.py host/run.sh stack
+docker rm -f skybeta-stack    # the service starts it again in about 10 s; on the ground, keep it still
 ```
 
 The `competitor` window builds the team workspace (`team_build.sh`) before launching. Extra
@@ -414,8 +417,9 @@ hard-codes either spelling — `check_topics.sh` and
 
 ### Camera mount pose
 
-`host/run.sh stack <x> <y> <z> <roll> <pitch> <yaw>` becomes the `base_link →
-oak_parent_frame` static TF. Translation in metres, rotation in radians, FLU body axes,
+`CAMERA_X/Y/Z` and `CAMERA_ROLL/PITCH/YAW` in `/etc/skybeta/drone.env` become the `base_link →
+oak_parent_frame` static TF. That is the only place the boot-time service reads them; `host/run.sh
+stack <x> <y> <z> <roll> <pitch> <yaw>` overrides them for a hand-started stack. Translation in metres, rotation in radians, FLU body axes,
 measured from the **Pixhawk's primary IMU** to the **left** stereo lens focal point
 (cuVSLAM uses the left camera as the optical centre).
 

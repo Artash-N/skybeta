@@ -165,9 +165,11 @@ the GPS antenna) to the **left** stereo lens focal point, in FLU body axes: +x f
 along the Pixhawk's mounting arrow, +y left, +z up. Then the rotation of the camera in
 that same frame.
 
+Put them in `/etc/skybeta/drone.env`, which is what the boot-time service reads:
+
 ```bash
-#              x     y     z    roll pitch  yaw      metres, then radians
-host/run.sh stack 0.10  0.00 -0.02   0.0  0.35  0.0
+CAMERA_X=0.10  CAMERA_Y=0.00  CAMERA_Z=-0.02        # metres
+CAMERA_ROLL=0.0  CAMERA_PITCH=0.35  CAMERA_YAW=0.0  # radians
 ```
 
 - [ ] Translation measured, to ~5 mm.

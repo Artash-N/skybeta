@@ -11,7 +11,8 @@ canonical hardware/PX4 procedure; [`README.md`](README.md) for the container wor
 - **`host/`** does what a container can't: `provision.sh` (idempotent, resumable: prereqs →
   UART DMA patch → power mode → image pull), `doctor.sh` (unprivileged health check),
   `run.sh stack|shell|bag|build|sim`, `build_image.sh` / `pull_image.sh` / `push_image.sh`,
-  `jetson_uart_dma_fix.sh`, `uart_loopback_test.py`. The old numbered scripts are gone.
+  `jetson_uart_dma_fix.sh`, `uart_loopback_test.py`, `autostart.sh` (per-drone boot-time stack:
+  `skybeta-stack.service` → `stack_service.sh`). The old numbered scripts are gone.
   Per-drone identity: `/etc/skybeta/drone.env` (template `drone.env.example`, parsed by
   `drone_env.sh`). DDS isolation: `dds/fastdds_localhost.xml` (ROS nodes) and
   `dds/agent_refs_{local,network}.xml` (the agent's PX4 participant, `UXRCE_DDS_PTCFG=2`).
@@ -25,7 +26,8 @@ canonical hardware/PX4 procedure; [`README.md`](README.md) for the container wor
   pipeline (agent, cuVSLAM, bridge) never sources that overlay.
 - **`src/`** — `oakd_vslam_bringup` (cuVSLAM launch + the PX4 odometry bridge),
   `skybeta_flight_interface` (the competitor-facing offboard wrapper: 10 Hz heartbeat, ENU↔NED,
-  altitude + speed clamp, **no geofence** since 0.3.0, **no arm path**), `competitor_example` (Python reference mission),
+  altitude + speed clamp, **no geofence** since 0.3.0, **no arm path**, enters Offboard once after
+  the pilot arms in Position: `auto_offboard.py`), `competitor_example` (Python reference mission),
   `competitor_advanced_cpp` (px4_ros2_cpp custom mode). Competitors add their own packages
   in the team workspace, not here.
 - **`px4/`** — pinned v1.16.2 firmware + staged parameter files; **`tools/`** — `param_diff.py`,
@@ -63,6 +65,16 @@ Measured 2026-09-02 on the dev unit, not assumed:
 
 ## Hardware status
 
+- **No skybeta airframe has an optical-flow sensor** (fleet owner, 2026-11-03; applies to every
+  drone). The only ground-facing sensor is **one downward laser rangefinder with a ~1° beam**,
+  run by PX4's VL53L1X driver (`SENS_EN_VL53L1X=1`; drone 16's FC reports `DISTANCE_SENSOR`
+  laser, downward, 0–4 m). Earlier text here and in 03a called it a "27 deg FOV" VL53L1X; the
+  beam is narrow, and the exact part is not recorded yet. The `EKF2_OF_CTRL=1`,
+  `SENS_EN_PMW3901=1`, `SENS_TFLOW_CFG=103` in the May-07 dump (and so in `00_baseline`) are a
+  leftover sensor set; `08_no_optical_flow.params` turns them off. **Horizontal position comes
+  from VIO and nothing else** (no GPS, no flow): without the stack, Position mode cannot engage,
+  and if VIO loses tracking in flight PX4 falls back to Altitude behaviour.
+
 - **OAK-D-S2 is on USB 3.0 SuperSpeed — do not be fooled by `lsusb` before it boots.**
   The MyriadX enumerates twice. Unbooted it appears as `03e7:2485` at **480 Mbps** on bus 1;
   once depthai loads firmware it re-enumerates as `03e7:f63b` at **5000 Mbps** on `2-1.1`
@@ -72,8 +84,10 @@ Measured 2026-09-02 on the dev unit, not assumed:
   `CAM_A = IMX378` 4056×3040 COLOR; `CAM_B`/`CAM_C` = **`OV9282` 1280×800**, supported types
   `[MONO, COLOR]`. IMU is **BNO086** fw 3.9.9 (the 9-axis part, not the BMI270 fallback).
 - **Pixhawk link is intermittent — the TELEM2 JST-GH connector is physically damaged and
-  does not seat fully.** Confirmed by the user 2026-09-02. This is the root cause of every
-  UART symptom in this repo's history; do not go looking for a software explanation.
+  does not seat fully.** Confirmed by the user 2026-09-02. This is the root cause of the
+  intermittent first-contact silence in this repo's history (0 bytes until a reseat); for that
+  symptom, do not go looking for a software explanation. Silence that starts **after the stack
+  was stopped or restarted** is a different, firmware fault: bug #15 (found 2026-10-20).
 
   Observed sequence in one session: silent for hours → one clean run in which the agent
   established a session and built the **entire** bridge (51 topics, 24 datawriters,
@@ -88,6 +102,12 @@ Measured 2026-09-02 on the dev unit, not assumed:
   restarted, PX4 never reconnected. That session also showed the FC is on
   `UXRCE_DDS_DOM_ID=0`, `UXRCE_DDS_PTCFG=0` (agent participant multicasting on WiFi to
   `239.255.0.1:7400`).
+
+  **Correction 2026-10-20:** the last step of that sequence (0 bytes after the stack was
+  restarted, PX4 never reconnected) was not the connector. It is bug #15: on PX4 v1.16.2 the
+  FC's TELEM2 transmitter dies when the agent stops answering and stays dead until the FC is
+  power-cycled or rebooted. Reproduced on drone 16 with a good cable; a reseat does not clear
+  it, an FC `reboot` does.
 
   **Consequences for debugging:** any *negative* UART result recorded while this connector is
   in place is uninformative — it tells you nothing about configuration. Positive results are
@@ -149,7 +169,7 @@ from the v1.14 *and* v1.15 parameter references and first appears in v1.16 (chec
 So TELEM2 was carrying **MAVLink**, not uXRCE-DDS — i.e. the working state on disk is §3 of
 the setup doc (the MAVProxy sanity test), not §7 (the DDS bridge). The estimator was also
 still on the *old* sensor set the container is meant to replace: `EKF2_OF_CTRL=1` (optical
-flow on), `EKF2_RNG_CTRL=2` with a measured `EKF2_RNG_POS_Y=-0.027432`, `EKF2_GPS_CTRL=7`.
+flow on — but no current airframe has a flow sensor, see Hardware status), `EKF2_RNG_CTRL=2` with a measured `EKF2_RNG_POS_Y=-0.027432`, `EKF2_GPS_CTRL=7`.
 
 Caveat: the dump may be truncated (1129 lines vs 1174 `PARAM_VALUE` messages in the tlog), so
 treat a *missing* param as unknown; a *present* one is reliable. And these are May-7 values —
@@ -321,12 +341,66 @@ Then `mavproxy.py --master=/dev/ttyTHS1,57600 --show-errors`.
 
 Reboot the FC after either change — every param above is reboot-gated.
 
+### Fleet policy — `04_rc_only_fd_roll_off.params` (2026-10-22)
+
+| Param | Value | Meaning |
+|---|---|---|
+| `COM_RC_IN_MODE` | `0` | RC Transmitter only. The May dump (and so the baseline until 2026-10-22) had **1 = Joystick only**, which disables RC input and its checks: FCs provisioned before that date ignore the RC transmitter until re-flashed |
+| `FD_FAIL_R` | `0` | roll failure detector off (0 = check disabled; default 60 deg / 0.3 s → takeoff lockdown). `FD_FAIL_P` stays 60 |
+
+Kept out of `00_baseline.params` so `param_diff --make-baseline` still reproduces the baseline
+from the May-07 dump; `~/pixhawk_params/flash.sh` loads 04 by default.
+
+### Fleet policy — `05_rc_switches_board_rot.params` (2026-11-01)
+
+| Param | Value | Meaning |
+|---|---|---|
+| `RC_MAP_ARM_SW` | `7` | arm/disarm switch on RC channel 7. The May dump (baseline until 2026-11-01) had arm on **5** and kill on **7**, i.e. swapped. Stick arming is off anyway (`MAN_ARM_GESTURE=0`) |
+| `RC_MAP_KILL_SW` | `5` | emergency kill switch on RC channel 5 |
+| `SENS_BOARD_ROT` | `8` | FMU board **Roll 180°** (v1.16 enum: 0 none, 4 yaw 180, 8 roll 180, 12 pitch 180): the 6C hangs upside down on these airframes, read off drone 20's QGC setup. Not 4 (yaw 180 = right way up, facing the tail). Reboot-gated. `SENS_BOARD_X/Y/Z_OFF` (level horizon) stays per-unit and must be calibrated **after** this is loaded |
+
+Same staged-file reasoning as 04; `flash.sh` loads 05 by default. `param_diff` and
+`~/pixhawk_autoparams.py` now exclude only `SENS_BOARD_[XYZ]_OFF` as per-unit, not the whole
+`SENS_BOARD_` family, so `SENS_BOARD_ROT` reaches the FC. Every FC flashed before 2026-11-01 has
+the swapped switches and no rotation until it is re-run through the flasher.
+
+### Fleet policy — `06_rc_radiomaster.params` and `07_airframe_geometry.params` (2026-11-01)
+
+Both read off **drone 20's FC** (`px4/params/fleet/drone20-radiomaster-2026-11-01.params`), the
+one airframe configured by hand in QGC. 06: `RC_MAP_ROLL/PITCH/THROTTLE/YAW = 1/2/3/4` (AETR; the
+May dump's TAER 4/3/2/1 scrambles the sticks on the RadioMaster) and `RC1..RC18`
+`_MIN/_TRIM/_MAX/_DZ/_REV` (sticks 982/1494/2005, switches 1000/1500/2000, deadzone 10). The
+`RC<n>_*` family is **no longer per-unit** in `param_diff` or `~/pixhawk_autoparams.py`: one
+transmitter model fleet-wide. 07: `CA_ROTOR0..3_PX/PY` (front x +0.08, rear x −0.15, y ±0.16 /
+±0.14) and `EKF2_RNG_POS_Z = 0.03445`; the baseline had PX4's ±1 m placeholders. Baseline is
+now 904 rows (907 before 08). Drone 20 diffs clean against baseline+staged except the deliberately unloaded 03b.
+
+### Fleet policy — `08_no_optical_flow.params` (2026-11-03)
+
+`EKF2_OF_CTRL=0`, `SENS_EN_PMW3901=0`, `SENS_TFLOW_CFG=0` (frees TELEM3). No airframe has a flow
+sensor (Hardware status). In `param_diff` STAGED and `flash.sh`'s default set; once loaded the
+`SENS_FLOW_*` params vanish from the FC, so `param_diff --dump` lists them as MISSING. Expected.
+
+### Fleet policy — `09_autonomy_takeover.params` (2026-11-05)
+
+`COM_RC_OVERRIDE = 3` (default 1): bit 1 lets the sticks take over from Offboard. Needed because of
+the competition flow: the pilot selects Position and arms, then `flight_interface` requests Offboard
+(`auto_offboard_on_arm`, rules in `auto_offboard.py`), so the mode switch is already on Position
+during autonomy and PX4 only acts on it when it **changes** (`ManualControl.cpp`,
+`mode_slot != _previous_switches.mode_slot`). Checked in the v1.16 source, not assumed: Offboard can
+be entered armed on the ground (`UserModeIntention::change` has no landed check, only `canRun`), and
+takeoff starts when a position setpoint is above the vehicle or vz is upward
+(`MulticopterPositionControl.cpp`). `min_altitude_m` floors every pose, so any pose lifts it to 0.3 m.
+Throttle counts as a stick (`sticks_moving`), and low throttle in Position descends, so raising
+it is the clean take-over. **None of this has flown.** Default in `param_diff` STAGED and `flash.sh`,
+as is 03b since the fleet rollout. Baseline is 903 rows.
+
 ### EKF2 for vision
 
 | Param | Set to | Currently (May) | Why |
 |---|---|---|---|
 | `EKF2_EV_CTRL` | `9` | **0** | bitmask: `0`=horiz pos, `1`=vert pos, `2`=3D velocity, `3`=yaw. 9 = horiz pos + yaw. Add bit 1 (→11) only once vision altitude is trusted |
-| `EKF2_EV_DELAY` | `70` | **0** | ms, range 0–300. **Measured** 2026-10-16 on the bench Orin, `tools/latency_probe.py`: image → bridge publish p50 68.7 ms, p95 102 ms, + ~1–2 ms serial. Re-check per airframe |
+| `EKF2_EV_DELAY` | `70` | **0** | ms, range 0–300. **Measured** 2026-10-16 on the bench Orin, `tools/latency_probe.py`: image → bridge publish p50 68.7 ms, p95 102 ms, + ~1–2 ms serial. Re-check per airframe. Drone 16 (2026-11-03): p50 60.4 / p95 106 ms → **60** |
 | `EKF2_HGT_REF` | `2` (Range) | 2 (Range) | values: `0`=Baro, `1`=GPS, `2`=Range, `3`=Vision. Range is the fleet choice (03a, PX4 "Indoor (non-flat terrain)") |
 | `EKF2_BARO_CTRL` | `1` | **0** | default is Enabled. With baro off and GPS off, losing the range finder leaves **no height aiding** |
 | `EKF2_RNG_CTRL` | `1` (conditional) | 2 | course may have boxes/tables; `2` is PX4's flat-floor variant |
@@ -335,9 +409,72 @@ Reboot the FC after either change — every param above is reboot-gated.
 | `EKF2_EVA_NOISE` | `0.05` | 0.1 | README asks for 0.05 |
 | `EKF2_EV_POS_X/Y/Z` | `0` | 0 ✓ | keep zero — the static TF carries the lever arm (bug #9) |
 
-Only once vision is trusted, retire the sensors it replaces: `EKF2_OF_CTRL = 0` (optical flow,
-currently `1`); the range finder stays as the height reference (03a). Do not change these in the same
-sitting as enabling EV — change one thing at a time or you cannot attribute the result.
+There is no optical flow to retire: no airframe has a flow sensor, and `08_no_optical_flow.params`
+(fleet default since 2026-11-03) sets `EKF2_OF_CTRL = 0`. The range finder stays as the height
+reference (03a).
+
+## Drone 16: VIO position hold on by default (2026-11-03)
+
+Drone 16 (`skybeta-16`, Tailscale 100.94.45.41, Jetson serial 1423825093262, FC sysid 16 on the
+patched `v1.16.2-1-g7a39c59`) is the first airframe that flies **Position** mode on VIO with
+nobody logged in: power up, leave it still for about a minute, and Position (mode switch position 3,
+`RC_MAP_FLTMODE=6`, `COM_FLTMODE1/4/6 = Manual/Altitude/Position`) is available.
+
+- **FC:** fleet default set + `08` + **`03b`** with `EKF2_EV_DELAY=60`, measured on this airframe
+  (`tools/latency_probe.py`, 30 s: full chain p50 60.4 ms, p95 106 ms, driver leg 36.5 ms). Loaded
+  with `~/pixhawk_params/flash.sh … 08_no_optical_flow.params 03b_ekf2_vision.params --set
+  EKF2_EV_DELAY=60 --drone-id 16` (1036 params, 0 missing/mismatched). Read-back:
+  `px4/params/fleet/drone16-vio-2026-11-03.params`; `param_diff --dump` differs from
+  baseline+staged only in `EKF2_EV_DELAY` (60 vs 70).
+- **Jetson:** `sudo host/autostart.sh enable` → `skybeta-stack.service` → `host/stack_service.sh`
+  (stack started detached, restarted if agent/slam/bridge dies). Attach with
+  `docker exec -it skybeta-stack tmux attach -t skybeta`; `docker rm -f skybeta-stack` restarts it;
+  `sudo systemctl stop skybeta-stack` stops it until the next boot; `sudo host/autostart.sh
+  disable` removes it. Files were copied onto the drone's 63fec32 checkout (so it shows as dirty)
+  until fleet-ready carries them.
+- **Bench-verified (props off, stack up, FC rebooted onto the new params):**
+  `estimator_status_flags`: `cs_ev_pos` and `cs_ev_yaw` true, `cs_rng_hgt` and `cs_baro_hgt` true,
+  `cs_opt_flow`/`cs_mag_hdg` false. `vehicle_local_position`: `xy_valid`/`v_xy_valid` true, eph
+  0.05 m. `failsafe_flags.local_position_invalid` false (what Position mode needs).
+  `estimator_aid_src_ev_yaw` test ratio 0.0007, `ev_pos` 0.00003, both fused.
+  `heading_good_for_control` reads false and `cs_yaw_align` false: with an FRD frame EKF2
+  v1.16 resets its yaw to EV yaw without setting `yaw_align` (that path is for NED); it does not
+  gate Position mode (`local_position_invalid` is false).
+- **Bench-only arming failures (not VIO):** "USB connected" (`health_component system`; PX4 refuses
+  to arm with the FC on USB), no RC link (Manual/Alt/Pos need the transmitter), "Strong magnetic
+  interference" (`COM_ARM_MAG_STR=2`, warning only; mag not fused), global position (GPS modes only).
+  One `pre_flt_fail_innov_heading` (heading ratio 1.46) right after the FC reboot cleared within a minute.
+- **Operating notes:** the VIO origin/heading come from the startup pose, so keep it still at power-up.
+  Tracking loss (dark, blank floor/wall, lens covered) leaves no horizontal aiding → Altitude
+  behaviour. The usbprov stack test `docker rm -f`s `skybeta-stack`, so stop the service before running it.
+- **Service enabled 2026-11-03 22:54:** stack up 14 s after `enable`; under it, `cs_ev_pos`/`cs_ev_yaw`
+  true, `xy_valid` true (eph 0.04 m), `local_position_invalid` false.
+- **Indoor caution:** the baseline carries `MPC_VEL_MANUAL=10` / `MPC_XY_VEL_MAX=12` m/s (full stick in
+  Position mode = 10 m/s), far beyond a room and beyond what VIO tracks without motion blur.
+  Offboard is not reachable from RC (`RC_MAP_OFFB_SW=0`, no Offboard in `COM_FLTMODE*`).
+- **Jetson reboot, 2026-11-03 (FC kept powered on USB):** `skybeta-stack.service` started at boot
+  with nobody logged in, "stack up" 15 s after the unit started (~20 s after kernel boot); about a
+  minute after boot `vo_state=1`, `cs_ev_pos`/`cs_ev_yaw` true, `xy_valid` true (eph 0.04 m),
+  `local_position_invalid` false. The FC, up throughout, reconnected to the new agent with no
+  power cycle (patched firmware). An FC-only power cycle under the running stack also recovered
+  by itself: fusing again ~15 s after the FC booted.
+- **Clock step after boot broke vision (found and fixed 2026-11-03).** The Jetson has no RTC battery:
+  it booted at the restored 22:58:21, the stack started, and NTP stepped the clock to 23:04:08. The
+  OAK-D driver keeps stamping frames on its start-time clock, so every
+  `/fmu/in/vehicle_visual_odometry` reached the FC with `timestamp_sample` 317 s stale (FC-side
+  `listener vehicle_visual_odometry`). EKF2 rode it out until its time-sync filter caught up, then
+  stopped fusing (`estimator_aid_src_ev_pos` last updated 80 s earlier, `cs_ev_pos` false,
+  `xy_valid` false) mid hand test. A stack restart made the samples 57 ms old again. **Fix:**
+  `stack_service.sh` waits up to 90 s for `NTPSynchronized=yes` before starting, and restarts the
+  stack when wall clock moves against `/proc/uptime` by more than 0.5 s. Both verified on drone 16:
+  a forced +3 s step logged "clock stepped by +2.5 s" and restarted, and with timesyncd paused it
+  waited, synced after 44 s, then started. **This affects any hand-started stack too:** after a cold
+  boot, start the stack only once `timedatectl` says synchronized, or restart it after the sync.
+- **Hand test 1 (after the clock fix):** fusion continuous, no resets, `xy_valid` throughout,
+  returned to (0.06, −0.06) m; final 90° turn read +83°. Inconclusive on frame alignment: the
+  airframe was rotated while carried, max excursion 0.58 m, and the first motion registered left of
+  the nose. A controlled repeat (nose fixed, measured 1 m forward / right, then 90° CW) is pending.
+- **Not yet verified:** an actual hover, and a battery cold boot of Jetson and FC together (FC off USB).
 
 ## Flight symptoms → most likely causes
 
@@ -552,7 +689,11 @@ a real FC (the TELEM2 link dropped first); two drones on one access point.
 end-to-end bench section above). **#10–#14 are FIXED on branch `fleet-ready` as of
 2026-10-12** (image `skybeta:0.2.0`, see the fleet bench section above); #13 additionally
 needs `UXRCE_DDS_PTCFG=2` on every FC, which has not yet been carried through a real
-`/fmu` data run. They are kept here because the *diagnosis* is the valuable part:
+`/fmu` data run. **#15 is FIXED by firmware (found 2026-10-20, fix verified 2026-10-21)**: on stock PX4
+v1.16.2 the FC's TELEM2 stops transmitting after any agent loss until the FC is power-cycled;
+FCs must run `px4/firmware/px4_fmu-v6c_default-v1.16.2-1-g7a39c59.px4`, and until an FC does,
+every stack stop needs an FC power cycle. The fixed entries are
+kept here because the *diagnosis* is the valuable part:
 each one records how the symptom presented and what the evidence was, so a regression is
 recognisable. Anything still open is called out explicitly in its own entry.
 
@@ -861,6 +1002,111 @@ The competitor guide documented `COMPETITOR_PKG=my_team_nav host/run.sh stack`, 
 never passed either variable into `docker run`, so the stack always launched
 `competitor_example`. Now forwarded (and settable in `drone.env`).
 
+### 15. FIXED (firmware `v1.16.2-1-g7a39c59`, verified 2026-10-21) — FC TELEM2 transmitter dies after any agent loss (NuttX STM32H7 TX DMA)
+
+**How it presented** (fleet provisioning batch, drones 5, 6 and 16, 2026-10-20): the usbprov
+stack test passed right after the FC booted. The test then tears the stack down with
+`docker rm -f skybeta-stack` (MicroXRCEAgent dies with SIGKILL), and a second stack test
+1-2 min later failed with "vehicle_status never reached 0.5 Hz (got none)", `fc.link` false and
+0 `/fmu/out` topics. Only an FC power cycle or reboot restored the link. So on v1.16.2 **every
+stack restart on an airframe loses the FC until it is power-cycled.**
+
+**Bench evidence**, 2026-10-20, drone 16 (Jetson `skybeta-16` + its Pixhawk 6C on PX4 v1.16.2,
+FC also on the laptop's USB for the MAVLink shell), in order:
+
+1. Stack stopped: `uxrce_dds_client status` says "Running, disconnected". PX4 `dmesg`: "No ping
+   response, disconnecting", then "init serial /dev/ttyS3 @ 921600 baud" (the client closed and
+   reopened TELEM2). A pyserial sniff of `/dev/ttyTHS1` @ 921600 for 4 s on the Jetson: **0
+   bytes**, although the client in that state sends a ping frame (0x7E HDLC) every second.
+2. `uxrce_dds_client stop` + `uxrce_dds_client start -t serial -d /dev/ttyS3 -b 921600`: logs
+   "init serial", still "disconnected", Jetson still 0 bytes in 14 s.
+3. FC `reboot`: within 20 s the Jetson sees the 1 Hz ping frames again (184 bytes / 8 frames in
+   8 s). So the Jetson's UART and its reopen path are fine; the fault is inside the FC.
+4. Fresh FC, agent-only container on the Jetson (`run_agent.sh`): session established, FC
+   "Running, connected", Payload tx 66620 B/s. `docker pause` of that container (the agent stops
+   answering but the Jetson's port stays **open**, line electrically idle): after 9 s the FC logs
+   "No ping response, disconnecting" + "init serial". `docker unpause`: the FC stays "Running,
+   disconnected"; the agent saw exactly one "session established". The trigger is the FC's own
+   disconnect-and-reopen, not anything the Jetson does to the line.
+5. Client stopped, `echo HELLO-FROM-NSH > /dev/ttyS3` from nsh: the shell blocked forever and
+   the Jetson saw 0 bytes. TELEM2's transmitter is dead at the NuttX level, for every opener,
+   until reboot.
+6. Jetson side checked independently: `serial-tegra.c` on L4T R36 drives TX idle-high while the
+   port is closed and never sends a break, and the Jetson's reopened port received data fine
+   (step 3).
+
+**Root cause** (confirmed by reading the pinned sources): a NuttX STM32H7 serial-driver bug.
+TELEM2 on fmu-v6c is `/dev/ttyS3` = UART5, built with `CONFIG_UART5_TXDMA=y`. On the last
+`close()`, `up_dma_shutdown()` stops an in-flight TX DMA transfer but never zeroes
+`dev->dmatx.length` / `dev->dmatx.nlength` nor the DMA stream's `NDTR` register. After the
+reopen, `up_dma_txavailable()` requires all three to be zero before it hands new data to DMA,
+so every later write only fills the 3000-byte ring buffer and nothing reaches the wire. The
+v1.16.2 `uxrce_dds_client` trips it deterministically: after 3 missed pings it calls
+`deleteSession()` (0 retries, it just sends DELETE_CLIENT), then `init()` → `deinit()` →
+`close(_fd)` microseconds after that write, then reopens the port.
+
+**Upstream.** Fixed by apache/nuttx PR #17203 "arch/arm/stm32h7: Fix UART TX DMA getting
+stuck" (merged 2025-10-20), carried as PX4/NuttX commit
+`d50ffd354495ce5d30814dba41d2eb70a32b8fa3` (PX4/NuttX PR #353) and brought into PX4-Autopilot
+`main` by PR #25791 (2025-10-22); shipped in PX4 **v1.17.0**. **Not** in v1.16.0, v1.16.1,
+v1.16.2 or `release/1.16` (NuttX submodule `886acbbdb4f061e5c0ce1a76afbcfa7cb7df9849`). The
+matching report is PX4-Autopilot #25357 "[Bug] MicroXRCEAgent cannot reconnect after Ctrl+C,
+PX4 stops sending data until reboot". Related but secondary: PX4-Autopilot #26022 / PR #26848
+(`uxrce_dds_client` session-reconnection hardening, merged to `main` 2026-04-15, also not in
+v1.16.2); it does not fix the DMA wedge.
+
+- https://github.com/apache/nuttx/pull/17203
+- https://github.com/PX4/NuttX/pull/353
+- https://github.com/PX4/PX4-Autopilot/pull/25791
+- https://github.com/PX4/PX4-Autopilot/issues/25357
+- https://github.com/PX4/PX4-Autopilot/issues/26022
+- https://github.com/PX4/PX4-Autopilot/pull/26848
+
+**Trigger:** anything that makes the agent stop answering for ~3 s while the FC is up: a stack
+stop, `docker rm -f`, a Jetson reboot, an agent crash.
+
+**What does not help:**
+
+- Reseating or replacing the TELEM2 cable. The line is fine; the FC's transmitter is wedged
+  (steps 3 and 5).
+- Restarting the client module (`uxrce_dds_client stop` / `start`, step 2).
+- Stopping the agent gracefully instead of `docker rm -f` (inferred from step 4, not tested
+  separately): either way the agent stops answering, and the FC's own missed-ping disconnect
+  is the trigger.
+- Parameters. None avoids it; `UXRCE_DDS_TX_TO` / `UXRCE_DDS_RX_TO` only change *when* the
+  disconnect happens.
+
+**Operating rule until every FC runs the fixed firmware:** after any stack stop or restart, or
+a Jetson reboot, power-cycle (or `reboot`) the FC before expecting `/fmu` data. In the stack
+test and in the field, **a passing first run followed by a silent second run is this bug, not
+the connector.**
+
+**Fix:** firmware. `px4/firmware/px4_fmu-v6c_default-v1.16.2-1-g7a39c59.px4` is PX4 v1.16.2
+with only PX4/NuttX `d50ffd3` cherry-picked (build script, patch and notes in
+`px4/firmware/txdma-fix/`). **Verified 2026-10-21 on drone 16:** the usbprov Pixhawk step
+reflashed its FC from stock (`54f0455ffc`) to `7a39c59541` at 21:06, then three stack tests
+were run back to back at 21:08:11, 21:08:48 and 21:09:15 with **no FC power cycle** between
+them; each tore the stack down with `docker rm -f` and the next one passed with all topics at
+rate after 20 s (`fc.link` true). On stock firmware the second run failed every time (section
+above). The FC's own `dmesg` afterwards shows the healthy cycle for each stop/start: "No ping
+response, disconnecting" → "init serial /dev/ttyS3 @ 921600 baud" → "synchronized with time
+offset" (reconnected) — the step that never came on stock. `ver all`: PX4 git-hash
+`7a39c595…`, OS git-hash `c21890c6…`, "PX4 version: 1.16.2 0" (dev type byte).
+
+Rollout notes: the patched build reports version 1.16.2 with the *dev* type byte and git hash
+`7a39c59541`, so the fleet flasher (`~/pixhawk_autoparams.py`) now compares the git hash from
+`AUTOPILOT_VERSION.flight_custom_version`, not only the version, or it would skip every board
+already on stock v1.16.2. Second gotcha found on the first reflash: `px_uploader.py` asks for
+the bootloader with a MAVLink command addressed to sysid 1 and to broadcast 0, and PX4 only
+honours commands addressed to its own `MAV_SYS_ID`. A provisioned FC carries `MAV_SYS_ID` =
+drone number, so the uploader looped on "Attempting reboot" forever (drone 16, 20:58-21:02). The
+flasher now sends `MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN` param1 = 3 to the board's real sysid
+before launching the uploader. Fresh boards (sysid 1) never showed this.
+
+Until an FC runs the patched build, the repo helps you recognise the wedge: `host/doctor.sh`'s
+`uart-traffic` FAIL names this cause first when the link worked earlier in the FC's power cycle,
+and the fleet dashboard's FC hint and the usbprov stack-test docs say to power-cycle the FC.
+
 ### 16. FIXED (2026-10-20) — patched UART DTB carried the golden board's CPU trim
 
 **How it presented:** drone 16 (a massflash clone of drone 15) ran with `nproc` = 4,
@@ -888,6 +1134,10 @@ MAXN_SUPER, no manual step). Older clones still carry the bad DTB: check `nproc`
 
 ## Gotchas when working here
 
+- **On PX4 v1.16.2, never expect the FC to come back after a stack stop without an FC power
+  cycle** (bug #15). Stopping the stack, `docker rm -f`, a Jetson reboot or an agent crash
+  wedges TELEM2 TX on the FC; the next stack run gets 0 bytes until the FC is power-cycled or
+  rebooted. Not the connector.
 - The image is **aarch64-only** — the NGC Isaac ROS base publishes no amd64 manifest.
 - Apt sources in the NGC base, precisely: `/etc/apt/sources.list.d/` holds `cuda`,
   `nvidia-l4t`, `ros2`, `nodesource`, `yarn`, `mosquitto` — **and** `/etc/apt/sources.list`

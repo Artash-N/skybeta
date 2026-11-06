@@ -50,6 +50,12 @@ anything publishing at all" probe. It is not fine as a number you put in a repor
 
 ### Zero bytes on `/dev/ttyTHS1`
 
+**If the link worked earlier in this FC power cycle, rule out the firmware first.** On PX4
+v1.16.2 the FC's TELEM2 transmitter dies when the agent stops answering (stack stop,
+`docker rm -f`, Jetson reboot, agent crash) and stays dead until the FC is power-cycled; see
+[the next subsection](#the-stack-was-restarted-and-the-fc-never-came-back-0-bytes-uxrce_dds_client-status-says-disconnected).
+No reseat fixes that. Otherwise:
+
 **Check the connector before any parameter.** The TELEM2 JST-GH 1.25 mm 6-pin connector
 on the reference airframe is physically damaged and does not seat fully. It produced
 hours of silence, then one clean run in which the agent built the entire bridge (51
@@ -90,6 +96,35 @@ Then, in order:
    not be caught.
 4. **Only now, parameters.** `MAV_1_CONFIG` and `UXRCE_DDS_CFG` must never both point at
    `102`. One serial port, one owner; whichever you are not using goes to `0`.
+
+### The stack was restarted and the FC never came back (0 bytes, `uxrce_dds_client status` says disconnected)
+
+**Symptom.** The first run after the FC boots is fine. After the stack is stopped or restarted
+(or the Jetson reboots, or the agent crashes), the next run gets nothing: 0 bytes on
+`/dev/ttyTHS1`, 0 `/fmu/out` topics, `check_topics.sh` echoes nothing. In the fleet batch on
+2026-10-20 (drones 5, 6, 16) this was a usbprov stack test that passed, then a second one
+1-2 min later that failed with "vehicle_status never reached 0.5 Hz (got none)".
+
+**Cause.** PX4 v1.16.2 firmware, [bug #15](../CLAUDE.md). After ~3 s without an answer from
+the agent, the FC's `uxrce_dds_client` disconnects and closes and reopens `/dev/ttyS3`; a NuttX
+STM32H7 UART TX DMA bug then leaves TELEM2's transmitter dead for every opener until the FC
+reboots. The cable is fine.
+
+**Confirm it in a minute.** On the Jetson, the sniff above: 0 bytes in 4 s. In a healthy
+disconnected state the client sends a 0x7E ping frame every second, so 0 bytes is not "the
+client is idle". On the FC's MAVLink console (QGC → Analyze Tools → MAVLink Console, FC on
+USB):
+
+```
+uxrce_dds_client status     # "Running, disconnected"
+dmesg                       # "No ping response, disconnecting" then
+                            # "init serial /dev/ttyS3 @ 921600 baud"
+```
+
+**Fix.** Power-cycle the FC (or `reboot` on the MAVLink console). Within 20 s the sniff shows
+the 1 Hz ping frames again, and the stack connects. `uxrce_dds_client stop` / `start` does not
+help, nor does a reseat, nor any parameter. The lasting fix is firmware: PX4 v1.16.2 with the
+NuttX fix cherry-picked. Until your FC runs it, power-cycle the FC after every stack stop.
 
 ### The agent connects, topics appear, nothing carries data
 
@@ -388,7 +423,7 @@ The essentials:
 
 | Symptom | First check |
 |---|---|
-| Nothing happens when the pilot selects Offboard | `/skybeta/state` → `px4_link`. False means the agent is not talking to the FC |
+| Nothing happens after the pilot arms in Position | `flight_interface`'s `auto offboard:` log line, then `/skybeta/state` → `px4_link`. False means the agent is not talking to the FC |
 | PX4 refuses to enter Offboard at all | The `OffboardControlMode` stream must already be running above ~2 Hz *before* the switch is flipped. `ros2 topic hz /fmu/in/offboard_control_mode` ≈ 10 Hz |
 | Drops out of Offboard by itself | The stream stalled. `COM_OF_LOSS_T`, then `COM_OBL_RC_ACT` |
 | Mission hangs at a waypoint | `clamped` in `/skybeta/state`. The safety envelope modifies setpoints silently apart from a throttled WARN |

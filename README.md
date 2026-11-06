@@ -59,10 +59,9 @@ OAK-D-S2  ──USB3──▶  depthai-ros v3 driver     /oak/{left,right}/image
                                         /fmu/in/trajectory_setpoint  ──▶  PX4
 ```
 
-**There is always a safety pilot on RC.** The flight interface has **no arm path** and
-never changes mode. The pilot arms, the pilot selects Offboard from the transmitter, and
-the pilot can take the vehicle back at any instant. Nothing you write may assume
-otherwise.
+**There is always a safety pilot on RC.** The flight interface has **no arm path**. The pilot
+selects Position and arms; the interface then enters Offboard, and the pilot can take the vehicle
+back at any instant with the sticks or the mode switch. Nothing you write may assume otherwise.
 
 ---
 
@@ -168,8 +167,10 @@ whose output must match before you move on.
 
 ```
 1  Flash PX4 v1.16.2                    px4/firmware/         (erases all parameters)
-2  Load 00_baseline.params, then
-   calibrate THIS airframe in QGC       px4/params/           (never clone calibration)
+2  Load 00_baseline.params + 04..07 (RC only,
+   arm ch 7 / kill ch 5, board roll 180,
+   RadioMaster sticks, frame geometry),
+   then calibrate THIS airframe in QGC                      px4/params/           (never clone calibration)
 3  host/provision.sh                    Jetson                (one reboot, then resume)
    + /etc/skybeta/drone.env             unique DRONE_ID / ROS_DOMAIN_ID   doctor: drone-identity
 4  Load 01_telem2_mavlink.params        prove the wire        mavproxy HEARTBEAT
@@ -257,11 +258,15 @@ skybeta/
 │   ├── firmware/                    px4_fmu-v6c_default-v1.16.2.px4 + .sha256 + README
 │   └── params/
 │       ├── README.md                the staged files and the order they go in
-│       ├── 00_baseline.params       924 fleet-common parameters, no calibration
+│       ├── 00_baseline.params       907 fleet-common parameters, no calibration
 │       ├── 01_telem2_mavlink.params      TELEM2 -> MAVLink, proves the wire
 │       ├── 02_telem2_uxrce_dds.params    TELEM2 -> uXRCE-DDS
 │       ├── 03a_height_reference.params   range-finder height + baro backup (the runaway-climb fix)
 │       ├── 03b_ekf2_vision.params        EV fusion
+│       ├── 04_rc_only_fd_roll_off.params COM_RC_IN_MODE=0 (no joystick), FD_FAIL_R=0
+│       ├── 05_rc_switches_board_rot.params RC_MAP_ARM_SW=7, RC_MAP_KILL_SW=5, SENS_BOARD_ROT=8 (roll 180)
+│       ├── 06_rc_radiomaster.params      AETR stick order + RC1..18 calibration of the fleet RadioMaster
+│       ├── 07_airframe_geometry.params   CA_ROTOR<n>_PX/PY rotor positions, EKF2_RNG_POS_Z
 │       └── fleet/                   per-drone saved dumps: <serial>.params, plus the
 │                                    SN0001 reference dump the baseline was generated from
 ├── sim/                             Isaac Sim 5.1.0 + Pegasus v5.1.0 + PX4 SITL, x86 only
@@ -453,6 +458,7 @@ Full version: **[`docs/debugging.md`](docs/debugging.md)**. The entries that com
 | Symptom | Cause | Fix |
 |---|---|---|
 | A rate measurement that looks bad | `ros2 topic hz` drops ~10 % in its own Python queue — it reported 27.1 Hz and a 150 ms max gap on a stream that was 30.016 Hz with a 33.37 ms max gap by header stamp | Measure with `record_bag.sh` / `host/run.sh bag` and analyse `header.stamp`. Never quote `ros2 topic hz` |
+| Zero bytes on `/dev/ttyTHS1` after the stack was stopped or restarted (the link worked earlier) | PX4 v1.16.2 firmware: the FC's TELEM2 TX stays dead after the agent goes away ([`CLAUDE.md`](CLAUDE.md) bug #15) | **Power-cycle the FC.** A reseat does not help. Do this after every stack stop until the patched firmware is flashed |
 | Zero bytes on `/dev/ttyTHS1` | The TELEM2 JST-GH connector, until proven otherwise | Reseat or replace the cable **before** touching any parameter. A negative UART result on a suspect cable is not a result |
 | `/fmu/*` topics listed but no data | `UXRCE_DDS_PTCFG` ≠ 2 on the FC (local DDS scope), `ROS_DOMAIN_ID` ≠ `UXRCE_DDS_DOM_ID`, or `px4_msgs` generation vs firmware | `check_topics.sh` — the pass is an echo returning a sample, not a topic count. The topics you see may be only the stack's own endpoints |
 | A laptop can't see the drone's topics | By design: `SKYBETA_DDS_SCOPE=local` keeps DDS on the Jetson | `SKYBETA_DDS_SCOPE=network` in `drone.env` + the same `ROS_DOMAIN_ID` on the laptop; switch back before flying |
@@ -487,8 +493,12 @@ has been measured, what has been fixed, and — importantly — what is *inferen
 than fact. The short list:
 
 - **The reference airframe's TELEM2 connector is physically damaged.** Every UART symptom
-  in this repo's history traces to it. Replace the cable before trusting any UART
-  measurement.
+  in this repo's history traces to it, except silence after a stack restart (next item).
+  Replace the cable before trusting any UART measurement.
+- **On PX4 v1.16.2, every stack stop loses the FC until it is power-cycled.** When the agent
+  stops answering (stack stop, `docker rm -f`, Jetson reboot, agent crash) the FC's TELEM2
+  transmitter stays dead until the FC reboots. Power-cycle the FC after any stack stop until
+  the patched firmware is flashed. [`CLAUDE.md`](CLAUDE.md) bug #15.
 - **The flight symptoms may not have the causes the analysis suggests.** The saved May-07
   parameter dump has `EKF2_EV_CTRL = 0` — external vision fusion was **off** during the
   flights that toilet-bowled and climbed. Re-dump the parameters that were actually live

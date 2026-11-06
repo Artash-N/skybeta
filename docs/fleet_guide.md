@@ -28,7 +28,7 @@ intermittently and there is no way to tell that from a configuration error.
 | 4 | Stage 01 — TELEM2 as MAVLink | QGC + Jetson | MAVProxy HEARTBEAT |
 | 5 | Stage 02 — TELEM2 as uXRCE-DDS | QGC + container | `check_topics.sh` **echoes data** |
 | 6 | Stage 03a — height reference | QGC | bench hover holds altitude |
-| 7 | Stage 03b — EV fusion | QGC | `cs_ev_pos` / `cs_ev_yaw` true; delay re-checked on this airframe |
+| 7 | Stage 03b — EV fusion, then (7c) autostart | QGC / flasher + Jetson | `cs_ev_pos` / `cs_ev_yaw` true; delay re-checked on this airframe; with 7c, true again after a cold boot with nobody logged in |
 | 8 | Record the per-drone baseline | repo | `param_diff` reports zero unexplained drift |
 
 ---
@@ -91,11 +91,31 @@ Two halves, and the order between them matters.
 [`../px4/params/00_baseline.params`](../px4/params/00_baseline.params), then **reboot the
 FC**.
 
-924 parameters: the airframe (`SYS_AUTOSTART = 4001`, generic quadcopter), the controller
+907 parameters: the airframe (`SYS_AUTOSTART = 4001`, generic quadcopter), the controller
 gains, the battery configuration, the failsafes, the logging profile — everything that
 should be byte-identical across the fleet. It was generated from a dump of the reference
 airframe with every per-unit value stripped out; the header of the file lists exactly what
 was removed and why, and `tools/param_diff.py --make-baseline` regenerates it.
+
+Then load [`../px4/params/04_rc_only_fd_roll_off.params`](../px4/params/04_rc_only_fd_roll_off.params)
+(`COM_RC_IN_MODE=0`: RC transmitter only, no joystick; `FD_FAIL_R=0`: roll failure detector
+off) and reboot again. An FC left on the May-07 value
+`COM_RC_IN_MODE=1` (Joystick only) **ignores the RC transmitter**.
+
+Then load [`../px4/params/05_rc_switches_board_rot.params`](../px4/params/05_rc_switches_board_rot.params)
+(`RC_MAP_ARM_SW=7`, `RC_MAP_KILL_SW=5`, `SENS_BOARD_ROT=8`: FMU board roll 180°, upside down)
+and reboot again. The May-07 dump had arm on channel 5 and kill on 7, the other way round, and
+no board rotation. Run the level-horizon calibration (2b) **after** 05 is in, so the trim is
+measured with the rotation applied.
+
+Then [`../px4/params/06_rc_radiomaster.params`](../px4/params/06_rc_radiomaster.params): the
+fleet RadioMaster's AETR stick order (`RC_MAP_ROLL/PITCH/THROTTLE/YAW = 1/2/3/4`; the May dump
+was TAER, which scrambles the sticks) and the RC1..RC18 endpoints, trims and deadzones read off
+drone 20 after QGC's Radio calibration. One transmitter model fleet-wide makes this a fleet
+value, so step 2b's radio calibration is only needed for a drone on a different transmitter.
+Then [`../px4/params/07_airframe_geometry.params`](../px4/params/07_airframe_geometry.params):
+the real rotor positions (`CA_ROTOR<n>_PX/PY`, the dump had PX4's ±1 m placeholders) and the
+range-finder height `EKF2_RNG_POS_Z`. The fleet flasher loads 04 to 07 for you.
 
 ### 2b. Calibrate **this** airframe
 
@@ -140,9 +160,9 @@ tools/param_diff.py --dump px4/params/fleet/<serial>.params --no-staged
 ```
 
 ```
-  expected  px4/params/00_baseline.params                  924 params
+  expected  px4/params/00_baseline.params                  907 params
   actual    px4/params/fleet/<serial>.params              1129 params
-  merged expected set: 924 params
+  merged expected set: 907 params
 
 OK -- no drift. Every expected parameter matches.
 ```
@@ -345,6 +365,11 @@ host/run.sh shell
 run_agent.sh
 ```
 
+> **Operating rule on PX4 v1.16.2: after stopping or restarting the stack (or rebooting the
+> Jetson), power-cycle the FC before the next run.** When the agent goes away the FC's
+> TELEM2 transmitter stays dead until the FC reboots, so the next run gets 0 bytes and no
+> `/fmu` data; reseating the cable does not help ([`CLAUDE.md`](../CLAUDE.md) bug #15).
+
 ### Verify — and this is the step people get wrong
 
 In a second shell on the container:
@@ -428,7 +453,7 @@ the range finder is the reference, the barometer is the backup.
 
 | Parameter | Value | |
 |---|---|---|
-| `EKF2_HGT_REF` | `2` (range) | trust the range finder (ST VL53L1X) |
+| `EKF2_HGT_REF` | `2` (range) | trust the range finder: one downward ~1° laser, PX4 VL53L1X driver — the airframe's only ground sensor (there is **no optical flow** on any skybeta airframe, see `08_no_optical_flow.params`) |
 | `EKF2_BARO_CTRL` | `1` | baro takes over whenever range is not fused |
 | `EKF2_RNG_CTRL` | `1` (conditional) | range only below 1 m/s and below `EKF2_RNG_A_HMAX`, with a height-above-ground consistency gate, so boxes and tables do not drag the height around. `2` (always) is PX4's flat-floor variant |
 | `EKF2_RNG_A_HMAX` | `3.0` m | inside the VL53L1X driver's 4 m maximum |
@@ -487,9 +512,12 @@ airframe with 7a. Identical hardware should land within a few ms.
 With the full stack running:
 
 ```bash
-host/run.sh shell
-python3 /workspace/tools/latency_probe.py --seconds 30
+# tools/ is not inside the image -- copy the probe into the running stack:
+docker cp tools/latency_probe.py skybeta-stack:/tmp/latency_probe.py
+docker exec -it skybeta-stack bash -lc 'source skybeta_env.sh; python3 /tmp/latency_probe.py --seconds 30'
 ```
+
+Drone 16, 2026-11-03: full chain p50 60.4 ms, p95 106 ms (driver leg 36.5 ms) → `60`.
 
 The probe reports two legs against the node's own clock: the **driver leg**
 (`/oak/left/image_raw` header stamp → arrival) and the **full chain**
@@ -523,9 +551,22 @@ is no inertial or gravity constraint.
 `host/run.sh stack <x> <y> <z> <roll> <pitch> <yaw>` drives. Setting both applies the
 offset twice.
 
-Deliberately **not** in this file: `EKF2_OF_CTRL` and `EKF2_RNG_CTRL`. Retiring optical
-flow and the rangefinder is a separate decision. Change one thing at a time or you cannot
-attribute the result.
+Deliberately **not** in this file: `EKF2_RNG_CTRL` (height stays 03a's job). Optical flow
+is not a choice: no airframe has a flow sensor, and `08_no_optical_flow.params` (in the
+flasher's default set) turns the inherited flow configuration off. VIO is therefore the
+**only** horizontal position source — if it loses tracking, Position mode has nothing left
+and PX4 falls back to Altitude behaviour.
+
+With the fleet flasher instead of QGC (FC on the laptop's USB; the default set is replaced
+when you name files, so name them all):
+
+```bash
+cd ~/pixhawk_params && ./flash.sh 00_baseline.params 02_telem2_uxrce_dds.params \
+  03a_height_reference.params 04_rc_only_fd_roll_off.params 05_rc_switches_board_rot.params \
+  06_rc_radiomaster.params 07_airframe_geometry.params 08_no_optical_flow.params \
+  03b_ekf2_vision.params --set EKF2_EV_DELAY=<measured> --once --drone-id <N> \
+  --device /dev/serial/by-id/usb-Auterion_PX4_FMU_v6C.x_0-if00
+```
 
 ### Verify
 
@@ -552,9 +593,54 @@ buys, and it is the proof EKF2 is *fusing* the vision rather than merely receivi
 they stay false, EKF2 is rejecting the measurements — check
 `listener estimator_innovation_test_ratios`.
 
+The same flags without the MAVLink console, from the stack:
+`ros2 topic echo --once /fmu/out/estimator_status_flags` (and `failsafe_flags`:
+`local_position_invalid: false` is what lets Position mode engage; `vehicle_local_position`:
+`xy_valid: true`).
+
 Bench, props off, before flying: move the airframe a metre by hand and confirm
 `/fmu/out/vehicle_local_position` tracks it. Yaw it 90° and confirm the cuVSLAM and FC
 headings differ by a constant, not a growing amount.
+
+Arming checks that fail **only on the bench** and are not a VIO problem: "USB connected"
+(PX4 refuses to arm with the FC on USB), no RC (Manual/Altitude/Position need the
+transmitter), "Strong magnetic interference" (a warning only at `COM_ARM_MAG_STR=2`; mag
+is not fused while EV yaw is), and the global-position check (GPS modes only).
+
+### 7c. Turn it on at boot (per drone)
+
+Once 7b verifies, make the drone fly VIO with nobody logged in: the stack starts at boot as
+`skybeta-stack.service`.
+
+```bash
+cd ~/skybeta && sudo host/autostart.sh enable      # once; asks for the sudo password
+host/autostart.sh status
+```
+
+The service waits up to 90 s for NTP time sync before starting, and restarts the stack if the
+clock steps later: the Jetson has no RTC, and a clock step after the camera driver started makes
+every vision timestamp stale, so EKF2 drops vision and Position mode is lost (drone 16,
+2026-11-03). A stack you start by hand after a cold boot has the same trap; start it once
+`timedatectl` says `System clock synchronized: yes`.
+
+From then on: power the drone up, keep it **still for the first minute** (cuVSLAM sets its
+origin and heading from the startup pose), and Position mode is available on the mode
+switch. The service (`host/stack_service.sh`) restarts the whole stack if the agent, SLAM
+or bridge window dies — safe only on the patched FC firmware (bug #15); a crashed
+competitor window is logged and left alone.
+
+| To | Run |
+|---|---|
+| look at the windows | `docker exec -it skybeta-stack tmux attach -t skybeta` (Ctrl-b d detaches) |
+| restart it (re-reads `drone.env`) | `docker rm -f skybeta-stack` — back within ~10 s |
+| stop it until the next boot | `sudo systemctl stop skybeta-stack` |
+| logs | `journalctl -u skybeta-stack -f` |
+| turn autostart off | `sudo host/autostart.sh disable` |
+
+`host/run.sh stack` refuses to start a second copy and prints the same table;
+`host/doctor.sh` shows a `stack-autostart` line and skips its UART sniff while the stack
+holds the port. The usbprov stack test removes `skybeta-stack` itself, so stop the
+service before running it on an autostart drone. Enabled on: **drone 16** (2026-11-03).
 
 ---
 
@@ -577,13 +663,17 @@ tools/param_diff.py --dump px4/params/fleet/<serial>.params
 ```
 
 ```
-  expected  px4/params/00_baseline.params                  924 params
+  expected  px4/params/00_baseline.params                  907 params
   expected  px4/params/01_telem2_mavlink.params              6 params
   expected  px4/params/02_telem2_uxrce_dds.params            6 params
   expected  px4/params/03a_height_reference.params           5 params
   expected  px4/params/03b_ekf2_vision.params                9 params
+  expected  px4/params/04_rc_only_fd_roll_off.params         2 params
+  expected  px4/params/05_rc_switches_board_rot.params       3 params
+  expected  px4/params/06_rc_radiomaster.params             94 params
+  expected  px4/params/07_airframe_geometry.params           9 params
   actual    px4/params/fleet/<serial>.params              1174 params
-  merged expected set: 946 params
+  merged expected set: 1037 params
 
 OK -- no drift. Every expected parameter matches.
 ```
@@ -642,6 +732,7 @@ drones in practice.
 | `SN0008` | `skybeta-08` | 8 | | | | | | | | | |
 | `SN0009` | `skybeta-09` | 9 | | | | | | | | | |
 | `SN0010` | `skybeta-10` | 10 | | | | | | | | | |
+| Jetson `1423825093262` | `skybeta-16` | 16 | v1.16.2-1-g7a39c59 | `0.3.0` | `sha256:6688685e1623` | | 60 | 0.1053/0/0.0304, 0/0/0 | | 2026-11-03 | 03b loaded; VIO position hold + stack autostart **on by default** |
 
 Per-airframe physical details — OAK-D serial, IMU part, kill-switch channel, radio
 calibration date — go in the record card at the end of

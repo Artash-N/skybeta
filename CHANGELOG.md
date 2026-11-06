@@ -3,9 +3,13 @@
 One entry per image version (`VERSION`, tag `skybeta:<VERSION>`). The evidence behind each
 change is in [`CLAUDE.md`](CLAUDE.md); this file says what changed and what you must do.
 
-## Unreleased — branch `fleet-ready`
+## 0.3.1 — autonomy after arming (2026-11-06, branch `fleet-ready`)
 
 ### You must do this
+
+- **Move each drone to the `skybeta:0.3.1` image.** 0.3.0 has no auto-Offboard. The order is
+  Position, **then** arm: arming in another mode and switching to Position does not start autonomy.
+  Team launch files must start `flight_interface` with `auto_offboard_on_arm:=true`.
 
 - **Autonomy now starts when the pilot arms in Position.** Competitor code could not fly before:
   nothing selected Offboard (`RC_MAP_OFFB_SW=0`, no Offboard in `COM_FLTMODE*`). `flight_interface`

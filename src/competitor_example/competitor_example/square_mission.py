@@ -1,7 +1,8 @@
 """THE FILE TO COPY. A worked example of a skybeta competitor node.
 
-Mission: wait for the safety pilot to select Offboard, hover at 1.5 m for 5 s,
-fly a 5 m square, then hold.  Everything it does is done through two topics:
+Mission: wait until the flight interface has entered Offboard (it does that once,
+when the safety pilot arms in Position), hover at 1.5 m for 5 s, fly a 5 m square,
+then hold.  Everything it does is done through two topics:
 
     subscribe  /skybeta/state                     what PX4 is doing
     subscribe  /visual_slam/tracking/odometry     where we are (ENU, odom)
@@ -201,7 +202,8 @@ class SquareMission(Node):
         if self.was_offboard and not self.offboard_active:
             self.get_logger().warn(
                 'Offboard lost -- the pilot has taken control. Mission '
-                'paused; it resumes if Offboard comes back.')
+                'paused. Offboard does not return until the vehicle '
+                'is disarmed and armed again.')
             self.was_offboard = False
         if self.offboard_active and not self.was_offboard:
             self.was_offboard = True

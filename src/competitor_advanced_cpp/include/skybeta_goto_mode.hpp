@@ -14,7 +14,9 @@
  * This is different. px4_ros2_cpp registers a *new flight mode* with PX4 over
  * uXRCE-DDS. Once registered it appears in QGroundControl's mode list and can
  * be bound to an RC mode switch position exactly like Position or Altitude,
- * and PX4's own commander runs its arming checks against it. That is a nicer
+ * and PX4's own commander runs its arming checks against it. As shipped nothing
+ * selects it: the fleet transmitter's switch holds Manual, Altitude and Position,
+ * and binding a mode is an FC parameter change, at your own risk. That is a nicer
  * fit for a competition -- the pilot selects your mode by name -- but it
  * comes with real extra risk:
  *
@@ -101,7 +103,7 @@ public:
 
   void onDeactivate() override
   {
-    // The pilot flipped the switch away, or PX4 took the mode off us. Nothing
+    // The pilot moved the mode switch, or PX4 took the mode off us. Nothing
     // to unwind: the next activation re-captures the origin.
     RCLCPP_INFO(_node.get_logger(), "'%s' deactivated", kSkybetaGotoModeName.c_str());
   }

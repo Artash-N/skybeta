@@ -10,7 +10,8 @@
  * The uXRCE-DDS agent must already be running and talking to the flight
  * controller -- registration is a live handshake with PX4, not a local
  * operation. Once it succeeds the mode shows up in QGroundControl's mode
- * list and can be bound to an RC switch position.
+ * list. Binding it to an RC switch position is an FC parameter change, at
+ * your own risk: as shipped, nothing selects it.
  *
  * Unlike the Python track, this path is NOT behind the skybeta safety
  * envelope. See skybeta_goto_mode.hpp.

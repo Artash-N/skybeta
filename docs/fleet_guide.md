@@ -750,7 +750,7 @@ host/build_image.sh
 REGISTRY=<your-registry>/<your-org> host/push_image.sh
 
 # each drone:
-REGISTRY=<your-registry>/<your-org> host/pull_image.sh 0.3.0
+REGISTRY=<your-registry>/<your-org> host/pull_image.sh $(cat VERSION)
 ```
 
 Bump `VERSION` when you cut an image the fleet is meant to run, so a semver tag never

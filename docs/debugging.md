@@ -424,7 +424,7 @@ The essentials:
 | Symptom | First check |
 |---|---|
 | Nothing happens after the pilot arms in Position | `flight_interface`'s `auto offboard:` log line, then `/skybeta/state` → `px4_link`. False means the agent is not talking to the FC |
-| PX4 refuses to enter Offboard at all | The `OffboardControlMode` stream must already be running above ~2 Hz *before* the switch is flipped. `ros2 topic hz /fmu/in/offboard_control_mode` ≈ 10 Hz |
+| PX4 refuses to enter Offboard at all | The `OffboardControlMode` stream must already be running above ~2 Hz *before* the pilot arms, because the mode request goes out at that instant. `ros2 topic hz /fmu/in/offboard_control_mode` ≈ 10 Hz |
 | Drops out of Offboard by itself | The stream stalled. `COM_OF_LOSS_T`, then `COM_OBL_RC_ACT` |
 | Mission hangs at a waypoint | `clamped` in `/skybeta/state`. The safety envelope modifies setpoints silently apart from a throttled WARN |
 | Setpoints ignored after your node pauses | Twist setpoints expire after `setpoint_timeout_s` (1 s) by design. Pose setpoints persist |

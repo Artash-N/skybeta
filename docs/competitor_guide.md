@@ -162,8 +162,9 @@ A JSON string at 5 Hz. Parse it with `json.loads(msg.data)`.
 }
 ```
 
-- `offboard_active` — **wait for this before you command anything.** It goes true when the
-  pilot flips the switch, and false the instant they take over.
+- `offboard_active` — **wait for this before you command anything.** It goes true once the
+  flight interface has entered Offboard (it asks when the pilot arms in Position, §4),
+  and false the instant the pilot takes over.
 - `odom_enu` is cuVSLAM's position; `local_enu` is EKF2's own estimate reported back in ENU.
   They should track each other. If they diverge, the vision link is degrading.
 - `envelope_ok` describes the **vehicle**, not the setpoint: false while the vehicle is above

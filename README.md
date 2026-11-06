@@ -11,6 +11,8 @@ everything below your setpoints is already built, measured and documented.
   [quick start](#quick-start--fleet-operator), then
   [`docs/fleet_guide.md`](docs/fleet_guide.md).
 
+**Need help?** Message Kelvin on Slack (`kelvinkn@stanford.edu`).
+
 ---
 
 ## Rules
@@ -39,6 +41,11 @@ Do not edit, replace, disable, stop, wrap or fake the output of any of these:
 Running `host/doctor.sh` is always fine, and so is reading these files. If one of them gets in
 your way, ask the organisers.
 
+### Do not change the sudo password
+
+Do not change the password of the `dronehacks` account: it is the login and the sudo password,
+and the organisers need it to maintain your drone.
+
 ### Fork the repo if you want to
 
 You are welcome to fork this repository and work from your fork. Keep your code in your fork or
@@ -65,6 +72,32 @@ code private, create a new private repository and push your packages there.
 - **Do not change `DRONE_ID`, `ROS_DOMAIN_ID` or `TEAM`** in `/etc/skybeta/drone.env`, or the
   drone's hostname. They keep your drone's traffic separate from every other drone on the shared
   network. `COMPETITOR_PKG` and `COMPETITOR_LAUNCH` in that file are yours to set.
+
+---
+
+## How your drone is tested
+
+1. We put your drone in the cage.
+2. The safety pilot selects **Position** and arms.
+3. **We expect your drone to take over from there.** Your code takes off and flies with nothing
+   more from us.
+
+So all of this has to be true before the pilot arms:
+
+- **Your code starts by itself.** Set `COMPETITOR_PKG` and `COMPETITOR_LAUNCH`, so that your node
+  runs in the stack's `competitor` window with nobody logged in.
+- **Your launch file starts `flight_interface` with `auto_offboard_on_arm:=true`.** Copying the
+  example's launch file does this.
+- **Your node is already publishing setpoints**, at least once a second, before arming.
+- **Vision is tracking**, so PX4 has a valid position. Leave the drone still for the first minute.
+
+**Takeover happens only at the moment of arming.** The drone must already be in Position: if it
+is armed in another mode and then switched to Position, your code does not take over. If anything
+above is missing, the drone stays in Position under the pilot and `flight_interface` logs
+`auto offboard: staying out of Offboard: <reason>`. Your code also has to take off within 10
+seconds of arming, or PX4 disarms the drone.
+
+Rehearse this whole sequence with the props off before your test.
 
 ---
 

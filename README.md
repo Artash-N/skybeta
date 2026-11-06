@@ -1,25 +1,130 @@
 # skybeta
 
 A GPS-denied autonomy stack for a Jetson Orin Nano paired with a Pixhawk 6C, shipped as
-one container image. **Fork it and write your navigation code in `src/`** — everything
-below your setpoints is already built, measured and documented.
+one container image. **Write your navigation code in `~/team_ws/src` on your drone**:
+everything below your setpoints is already built, measured and documented.
 
-Two audiences, two starting points:
-
-- **Competitors** → [quick start](#quick-start--competitor), then
+- **Competitors:** read the [rules](#rules), [connect to your drone](#connect-to-your-drone),
+  then follow the [quick start](#quick-start--competitor) and
   [`docs/competitor_guide.md`](docs/competitor_guide.md).
-- **Fleet operators** bringing up ten-plus identical drones →
+- **Fleet operators** bringing up ten-plus identical drones:
   [quick start](#quick-start--fleet-operator), then
   [`docs/fleet_guide.md`](docs/fleet_guide.md).
 
 ---
 
-## What this is
+## Rules
+
+You have root on your drone. That is so you can work freely, not permission to do everything
+below.
+
+### Do not touch another team's drone
+
+**Do not SSH into any drone other than your own, or you will be disqualified.** This holds
+whether or not the login works, and whether or not the drone is in use. Run `hostname` when you
+log in and check that it shows your drone number. If you reach the wrong drone by mistake, log
+out and tell the organisers.
+
+### Do not override the doctor or the monitoring
+
+Do not edit, replace, disable, stop, wrap or fake the output of any of these:
+
+| What | Where |
+|---|---|
+| Doctor (health check) | `host/doctor.sh` |
+| Status agent | `skybeta-status.service`, `/opt/skybeta-status/` |
+| ROS status sidecar | `skybeta-ros-status.service`, `/run/skybeta-status/` |
+| The organisers' link to the drone | Tailscale (`tailscaled`) |
+
+Running `host/doctor.sh` is always fine, and so is reading these files. If one of them gets in
+your way, ask the organisers.
+
+### Fork the repo if you want to
+
+You are welcome to fork this repository and work from your fork. Keep your code in your fork or
+in `~/team_ws`, and leave the `~/skybeta` checkout on the drone as it is: the organisers update
+it, and an update is refused if its tracked files have been changed.
+
+```bash
+# on the drone: your fork or your own repo goes in the team workspace
+cd ~/team_ws/src
+git clone https://github.com/<you>/<your-repo>.git
+```
+
+A GitHub fork of a public repository is public, so other teams can read it. If you want your
+code private, create a new private repository and push your packages there.
+
+### Keep the drone flying safely
+
+- **A safety pilot on RC is always there**, and can take the vehicle back at any time. Nothing
+  you write may assume otherwise.
+- **Run new code with the props off first**, then low and tethered. A hover on visual odometry
+  has not flown on any airframe yet, so your first runs are the test.
+- **Do not publish to `/fmu/in/*`** and do not modify `skybeta_flight_interface`. Send setpoints
+  through `/skybeta/setpoint/*`.
+- **Do not change `DRONE_ID`, `ROS_DOMAIN_ID` or `TEAM`** in `/etc/skybeta/drone.env`, or the
+  drone's hostname. They keep your drone's traffic separate from every other drone on the shared
+  network. `COMPETITOR_PKG` and `COMPETITOR_LAUNCH` in that file are yours to set.
+
+---
+
+## Connect to your drone
+
+You will get your **drone number**, its **login** and the **Wi-Fi details** from the organisers.
+The login user is `dronehacks`, and the drone's hostname is `skybeta-NN`, where `NN` is your
+drone number (drone 7 is `skybeta-07`). Your laptop and the drone must be on the same Wi-Fi network.
+
+```bash
+ssh dronehacks@<your-drone's-wifi-ip>
+```
+
+**If you don't know the Wi-Fi address, or Wi-Fi is down,** connect a USB cable from your laptop
+to the Jetson's USB-C port. Every Jetson answers on the same address over USB:
+
+```bash
+ssh dronehacks@192.168.55.1
+hostname                        # check this is your drone
+ip -4 -br addr show wlP1p1s0    # the drone's Wi-Fi address
+```
+
+Tailscale on the drones is for the organisers; teams do not use it.
+
+**What is on the drone:** this repository,
+[`Artash-N/skybeta`](https://github.com/Artash-N/skybeta), branch `fleet-ready`, cloned to
+`~/skybeta`. Your own code goes in `~/team_ws`, which updates never touch.
+
+---
+
+## How the drone works
+
+The drone has two computers. The **Pixhawk 6C** flight controller runs PX4: it keeps the vehicle
+stable and drives the motors. The **Jetson Orin Nano** works out where the vehicle is and runs
+your code, which decides where it goes.
 
 An OAK-D-S2 stereo camera feeds NVIDIA's **cuVSLAM** on the Jetson's GPU. The resulting
 visual odometry is converted to PX4's frame conventions and pushed to the flight
 controller over **uXRCE-DDS** on `/dev/ttyTHS1`, where EKF2 fuses it as external vision.
 The vehicle then knows where it is with no GPS and no optical flow.
+
+Height comes from a downward laser rangefinder, with the barometer as backup. **Horizontal position
+comes from vision and nothing else.** If cuVSLAM loses tracking in the air (darkness, a blank
+floor or wall, a covered lens), PX4 has no horizontal position and falls back to Altitude
+behaviour.
+
+### A flight, start to finish
+
+1. **Power up and keep the drone still for the first minute.** The stack starts by itself, and
+   position and heading are measured from wherever the drone was when it started.
+2. **Your node starts publishing setpoints** in the `competitor` window of the stack.
+3. **The safety pilot selects Position and arms.** The Jetson has no way to arm the vehicle.
+4. **The Jetson enters Offboard once, and your code takes off and flies.** The flight interface
+   clamps altitude and twist speed and sends your setpoints to PX4. It does not limit how far
+   you go horizontally: staying inside the flying area is your code's job and the pilot's.
+5. **The pilot can take over at any moment** with the sticks, the mode switch or the kill switch.
+   Offboard does not come back until the vehicle is disarmed and armed again.
+
+[`docs/competitor_guide.md`](docs/competitor_guide.md) §4 has the conditions and the take-over
+procedure in full.
 
 ### The data path
 

@@ -1,5 +1,8 @@
 # skybeta competitor guide
 
+**Read the [rules](../README.md#rules) first.** SSH into another team's drone and you will be
+disqualified. How to log in to yours: [connect to your drone](../README.md#connect-to-your-drone).
+
 You have a drone that already knows where it is. Your job is to decide where it should go.
 
 The stack below you — OAK-D-S2 → cuVSLAM → PX4 EKF2 over uXRCE-DDS — publishes a

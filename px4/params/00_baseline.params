@@ -5,19 +5,22 @@
 # Load this SECOND, immediately after flashing PX4 v1.16.2 (which erases all
 # parameters), and BEFORE the per-unit calibration in QGC. Then load the staged
 # files 01 / 02 / 03a / 03b in order as the bring-up in docs/fleet_guide.md
-# reaches each one. Reboot the FC after loading.
+# reaches each one, and 04 (RC only, roll failure detector off), 05 (arm switch ch 7,
+# kill switch ch 5, board roll 180), 06 (RadioMaster sticks + calibration) and 07
+# (airframe geometry) on every FC.
+# Reboot the FC after loading.
 #
 #   QGC -> Vehicle Setup -> Parameters -> Tools -> Load from file
 #
 # DERIVATION
 #
 # Generated from a MAVProxy parameter dump of the reference airframe
-# (mav.parm, 1129 parameters, captured 2026-05-07) by
+# (SN0001-reference-2026-05-07.parm, 1129 parameters, captured 2026-05-07) by
 #
 #   tools/param_diff.py --make-baseline <dump>
 #
 # Parameter types are the ones the firmware itself declares, read out of
-# px4_fmu-v6c_default-v1.16.2.px4 (its embedded parameter_xml).
+# px4_fmu-v6c_default-v1.16.2-1-g7a39c59.px4 (its embedded parameter_xml).
 #
 # WHAT IS *NOT* IN HERE, AND WHY
 #
@@ -33,20 +36,16 @@
 #          e.g. COM_FLIGHT_UUID, LND_FLIGHT_T_HI, LND_FLIGHT_T_LO
 #      1 x  MAVLink system id must be UNIQUE per airframe on a shared GCS link
 #          e.g. MAV_SYS_ID
-#     90 x  RC endpoint / trim / deadzone calibration -- per transmitter+receiver pair, set by QGC's Radio calibration
-#          e.g. RC10_DZ, RC10_MAX, RC10_MIN, RC10_REV
-#      4 x  board rotation and level-horizon trim -- written by the same QGC calibration step as CAL_*
-#          e.g. SENS_BOARD_ROT, SENS_BOARD_X_OFF, SENS_BOARD_Y_OFF, SENS_BOARD_Z_OFF
+#      3 x  level-horizon trim -- written by the same QGC calibration step as CAL_*. SENS_BOARD_ROT (the mount orientation) is fleet-wide and lives in 05
+#          e.g. SENS_BOARD_X_OFF, SENS_BOARD_Y_OFF, SENS_BOARD_Z_OFF
 #      1 x  differential-pressure zero offset -- per-sensor calibration
 #          e.g. SENS_DPRES_OFF
 #      3 x  one-shot 'calibrate on next boot' triggers, not configuration
 #          e.g. SYS_CAL_ACCEL, SYS_CAL_BARO, SYS_CAL_GYRO
-#      1 x  DDS domain must be UNIQUE per airframe on a shared network; equals ROS_DOMAIN_ID in that drone's /etc/skybeta/drone.env
-#          e.g. UXRCE_DDS_DOM_ID
 #      1 x  MAVProxy pseudo-parameters (e.g. _HASH_CHECK), not real PX4 parameters
 #          e.g. _HASH_CHECK
 #
-# Also excluded: every parameter set by 01/02/03a/03b, so that the staged files
+# Also excluded: every parameter set by 01/02/03a/03b/04/05/06/07, so that the staged files
 # remain the single place those values are defined and this file never
 # contradicts them.
 #
@@ -54,9 +53,10 @@
 #
 #   SYS_AUTOSTART = 4001          Generic Quadcopter -- change it if your
 #                                 airframe is not one.
-#   EKF2_OF_CTRL = 1              optical flow still enabled. The staged files
-#                                 deliberately do NOT retire it; that is a
-#                                 separate, later decision (px4/params/README.md).
+#   EKF2_OF_CTRL, SENS_EN_PMW3901, SENS_TFLOW_CFG
+#                                 the reference dump has optical flow on, but NO
+#                                 skybeta airframe has a flow sensor: these are
+#                                 owned by 08_no_optical_flow.params (all off).
 #   EKF2_RNG_POS_Y = -0.027432    measured on the reference airframe. Re-measure
 #                                 if your rangefinder sits elsewhere.
 #   BAT1_V_DIV / BAT1_A_PER_V     the Pixhawk 6C power-module defaults. If a
@@ -113,8 +113,6 @@
 1	1	CA_ROTOR0_AZ	-1.000000	9
 1	1	CA_ROTOR0_CT	6.500000	9
 1	1	CA_ROTOR0_KM	0.050000	9
-1	1	CA_ROTOR0_PX	1.000000	9
-1	1	CA_ROTOR0_PY	1.000000	9
 1	1	CA_ROTOR0_PZ	0.000000	9
 1	1	CA_ROTOR10_AX	0.000000	9
 1	1	CA_ROTOR10_AY	0.000000	9
@@ -137,24 +135,18 @@
 1	1	CA_ROTOR1_AZ	-1.000000	9
 1	1	CA_ROTOR1_CT	6.500000	9
 1	1	CA_ROTOR1_KM	0.050000	9
-1	1	CA_ROTOR1_PX	-1.000000	9
-1	1	CA_ROTOR1_PY	-1.000000	9
 1	1	CA_ROTOR1_PZ	0.000000	9
 1	1	CA_ROTOR2_AX	0.000000	9
 1	1	CA_ROTOR2_AY	0.000000	9
 1	1	CA_ROTOR2_AZ	-1.000000	9
 1	1	CA_ROTOR2_CT	6.500000	9
 1	1	CA_ROTOR2_KM	-0.050000	9
-1	1	CA_ROTOR2_PX	1.000000	9
-1	1	CA_ROTOR2_PY	-1.000000	9
 1	1	CA_ROTOR2_PZ	0.000000	9
 1	1	CA_ROTOR3_AX	0.000000	9
 1	1	CA_ROTOR3_AY	0.000000	9
 1	1	CA_ROTOR3_AZ	-1.000000	9
 1	1	CA_ROTOR3_CT	6.500000	9
 1	1	CA_ROTOR3_KM	-0.050000	9
-1	1	CA_ROTOR3_PX	-1.000000	9
-1	1	CA_ROTOR3_PY	1.000000	9
 1	1	CA_ROTOR3_PZ	0.000000	9
 1	1	CA_ROTOR4_AX	0.000000	9
 1	1	CA_ROTOR4_AY	0.000000	9
@@ -279,9 +271,7 @@
 1	1	COM_RAM_MAX	95.000000	9
 1	1	COM_RCL_EXCEPT	0	6
 1	1	COM_RC_ARM_HYST	1000	6
-1	1	COM_RC_IN_MODE	1	6
 1	1	COM_RC_LOSS_T	0.500000	9
-1	1	COM_RC_OVERRIDE	1	6
 1	1	COM_RC_STICK_OV	30.000000	9
 1	1	COM_SPOOLUP_TIME	1.000000	9
 1	1	COM_TAKEOFF_ACT	0	6
@@ -375,7 +365,6 @@
 1	1	EKF2_MULTI_IMU	3	6
 1	1	EKF2_NOAID_NOISE	10.000000	9
 1	1	EKF2_NOAID_TOUT	5000000	6
-1	1	EKF2_OF_CTRL	1	6
 1	1	EKF2_OF_DELAY	20.000000	9
 1	1	EKF2_OF_GATE	3.000000	9
 1	1	EKF2_OF_GYR_SRC	0	6
@@ -410,7 +399,6 @@
 1	1	EKF2_RNG_PITCH	0.000000	9
 1	1	EKF2_RNG_POS_X	0.000000	9
 1	1	EKF2_RNG_POS_Y	-0.027432	9
-1	1	EKF2_RNG_POS_Z	0.000000	9
 1	1	EKF2_RNG_QLTY_T	1.000000	9
 1	1	EKF2_RNG_SFE	0.050000	9
 1	1	EKF2_SEL_ERR_RED	0.200000	9
@@ -437,7 +425,6 @@
 1	1	FD_EXT_ATS_TRIG	1900	6
 1	1	FD_FAIL_P	60	6
 1	1	FD_FAIL_P_TTRI	0.300000	9
-1	1	FD_FAIL_R	60	6
 1	1	FD_FAIL_R_TTRI	0.300000	9
 1	1	FD_IMB_PROP_THR	30	6
 1	1	FLW_TGT_ALT_M	0	6
@@ -756,7 +743,6 @@
 1	1	RC_GEAR_TH	0.750000	9
 1	1	RC_KILLSWITCH_TH	0.750000	9
 1	1	RC_LOITER_TH	0.750000	9
-1	1	RC_MAP_ARM_SW	5	6
 1	1	RC_MAP_AUX1	0	6
 1	1	RC_MAP_AUX2	0	6
 1	1	RC_MAP_AUX3	0	6
@@ -769,7 +755,6 @@
 1	1	RC_MAP_FLTMODE	6	6
 1	1	RC_MAP_FLTM_BTN	0	6
 1	1	RC_MAP_GEAR_SW	0	6
-1	1	RC_MAP_KILL_SW	7	6
 1	1	RC_MAP_LOITER_SW	0	6
 1	1	RC_MAP_MODE_SW	0	6
 1	1	RC_MAP_OFFB_SW	0	6
@@ -777,12 +762,8 @@
 1	1	RC_MAP_PARAM2	0	6
 1	1	RC_MAP_PARAM3	0	6
 1	1	RC_MAP_PAY_SW	0	6
-1	1	RC_MAP_PITCH	3	6
 1	1	RC_MAP_RETURN_SW	0	6
-1	1	RC_MAP_ROLL	4	6
-1	1	RC_MAP_THROTTLE	2	6
 1	1	RC_MAP_TRANS_SW	0	6
-1	1	RC_MAP_YAW	1	6
 1	1	RC_OFFB_TH	0.750000	9
 1	1	RC_PAYLOAD_TH	0.750000	9
 1	1	RC_RETURN_TH	0.750000	9
@@ -817,7 +798,6 @@
 1	1	SENS_EN_MS5525DS	0	6
 1	1	SENS_EN_PAA3905	0	6
 1	1	SENS_EN_PAW3902	0	6
-1	1	SENS_EN_PMW3901	1	6
 1	1	SENS_EN_PX4FLOW	0	6
 1	1	SENS_EN_SDP3X	0	6
 1	1	SENS_EN_SF1XX	0	6
@@ -845,7 +825,6 @@
 1	1	SENS_MAG_RATE	15.000000	9
 1	1	SENS_MAG_SIDES	63	6
 1	1	SENS_SF0X_CFG	0	6
-1	1	SENS_TFLOW_CFG	103	6
 1	1	SENS_TFMINI_CFG	0	6
 1	1	SENS_ULAND_CFG	0	6
 1	1	SENS_VN_CFG	0	6

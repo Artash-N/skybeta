@@ -12,8 +12,9 @@
 # selects a secondary reference" -- the barometer. For a guaranteed-flat floor PX4's
 # "Indoor (flat terrain)" variant is EKF2_RNG_CTRL = 2 (always).
 #
-# The range finder is the ST VL53L1X: the PX4 driver's maximum is 4 m (long mode,
-# less in bright light), 27 deg field of view, one reading per 200 ms. Hence
+# The range finder is the airframe's ONLY ground sensor (there is no optical flow,
+# see 08): one downward laser with a narrow ~1 deg beam, run by PX4's VL53L1X
+# driver, whose maximum is 4 m (less in bright light), one reading per 200 ms. Hence
 # EKF2_RNG_A_HMAX = 3 m, inside that range, and a matching GF_MAX_VER_DIST on each
 # drone (see fleet/<serial>-fixes-*.params).
 #

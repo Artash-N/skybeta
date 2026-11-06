@@ -63,6 +63,12 @@ STAGED = [
     PARAM_DIR / "02_telem2_uxrce_dds.params",
     PARAM_DIR / "03a_height_reference.params",
     PARAM_DIR / "03b_ekf2_vision.params",
+    PARAM_DIR / "04_rc_only_fd_roll_off.params",
+    PARAM_DIR / "05_rc_switches_board_rot.params",
+    PARAM_DIR / "06_rc_radiomaster.params",
+    PARAM_DIR / "07_airframe_geometry.params",
+    PARAM_DIR / "08_no_optical_flow.params",
+    PARAM_DIR / "09_autonomy_takeover.params",
 ]
 FIRMWARE_DIR = REPO / "px4" / "firmware"
 # The MAVProxy dump of the reference airframe that 00_baseline.params was
@@ -85,22 +91,21 @@ REL_TOL = 1e-6
 # --------------------------------------------------------------------------
 # Each entry is (predicate, reason). The reason is written into the generated
 # file's header, so the exclusion list and its justification cannot drift apart.
-_RC_CHANNEL = re.compile(r"^RC\d+_(MIN|MAX|TRIM|DZ|REV)$")
+# RC<n>_(MIN|MAX|TRIM|DZ|REV) used to be excluded as per-transmitter calibration. Since
+# 2026-11-01 the fleet flies one transmitter model, so 06_rc_radiomaster.params pins them
+# fleet-wide and they are plain staged values.
 
 EXCLUSIONS = [
     (lambda n: n.startswith("CAL_"),
      "accelerometer / gyro / magnetometer / level-horizon calibration -- "
      "physically per-board, and QGC rewrites them during step 2"),
-    (lambda n: n.startswith("SENS_BOARD_"),
-     "board rotation and level-horizon trim -- written by the same QGC "
-     "calibration step as CAL_*"),
+    (lambda n: n in ("SENS_BOARD_X_OFF", "SENS_BOARD_Y_OFF", "SENS_BOARD_Z_OFF"),
+     "level-horizon trim -- written by the same QGC calibration step as CAL_*. "
+     "SENS_BOARD_ROT (the mount orientation) is fleet-wide and lives in 05"),
     (lambda n: n == "SENS_DPRES_OFF",
      "differential-pressure zero offset -- per-sensor calibration"),
     (lambda n: n in ("SYS_CAL_ACCEL", "SYS_CAL_BARO", "SYS_CAL_GYRO"),
      "one-shot 'calibrate on next boot' triggers, not configuration"),
-    (lambda n: bool(_RC_CHANNEL.match(n)),
-     "RC endpoint / trim / deadzone calibration -- per transmitter+receiver "
-     "pair, set by QGC's Radio calibration"),
     (lambda n: n == "MAV_SYS_ID",
      "MAVLink system id must be UNIQUE per airframe on a shared GCS link"),
     (lambda n: n == "UXRCE_DDS_DOM_ID",
@@ -326,7 +331,10 @@ BASELINE_HEADER = """\
 # Load this SECOND, immediately after flashing PX4 v1.16.2 (which erases all
 # parameters), and BEFORE the per-unit calibration in QGC. Then load the staged
 # files 01 / 02 / 03a / 03b in order as the bring-up in docs/fleet_guide.md
-# reaches each one. Reboot the FC after loading.
+# reaches each one, and 04 (RC only, roll failure detector off), 05 (arm switch ch 7,
+# kill switch ch 5, board roll 180), 06 (RadioMaster sticks + calibration) and 07
+# (airframe geometry) on every FC.
+# Reboot the FC after loading.
 #
 #   QGC -> Vehicle Setup -> Parameters -> Tools -> Load from file
 #
@@ -349,7 +357,7 @@ BASELINE_HEADER = """\
 # it is not, and drifts on take-off. Each drone must be calibrated on its own.
 #
 {exclusions}#
-# Also excluded: every parameter set by 01/02/03a/03b, so that the staged files
+# Also excluded: every parameter set by 01/02/03a/03b/04/05/06/07, so that the staged files
 # remain the single place those values are defined and this file never
 # contradicts them.
 #
@@ -357,9 +365,10 @@ BASELINE_HEADER = """\
 #
 #   SYS_AUTOSTART = 4001          Generic Quadcopter -- change it if your
 #                                 airframe is not one.
-#   EKF2_OF_CTRL = 1              optical flow still enabled. The staged files
-#                                 deliberately do NOT retire it; that is a
-#                                 separate, later decision (px4/params/README.md).
+#   EKF2_OF_CTRL, SENS_EN_PMW3901, SENS_TFLOW_CFG
+#                                 the reference dump has optical flow on, but NO
+#                                 skybeta airframe has a flow sensor: these are
+#                                 owned by 08_no_optical_flow.params (all off).
 #   EKF2_RNG_POS_Y = -0.027432    measured on the reference airframe. Re-measure
 #                                 if your rangefinder sits elsewhere.
 #   BAT1_V_DIV / BAT1_A_PER_V     the Pixhawk 6C power-module defaults. If a
@@ -523,7 +532,7 @@ def selftest() -> int:
               bad[0] if bad else f"{len(base)} rows")
         check(not badtype, "every type is 6 (INT32) or 9 (REAL32)",
               badtype[0] if badtype else "")
-        check(not cal, "no per-unit parameters (CAL_*, SENS_BOARD_*, RC<n>_*, ...)",
+        check(not cal, "no per-unit parameters (CAL_*, SENS_BOARD_*_OFF, MAV_SYS_ID, ...)",
               ", ".join(cal[:5]) if cal else "")
         staged_names: set[str] = set()
         for path in STAGED:

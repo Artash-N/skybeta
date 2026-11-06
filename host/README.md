@@ -17,7 +17,10 @@ the host, and only in the phases that genuinely require root.
 |---|---|
 | `provision.sh` | One idempotent, resumable entry point: apt deps → UART patch → power → image → doctor |
 | `doctor.sh` | Unprivileged health check. Non-zero exit on any FAIL |
-| `run.sh` | Launch the container: `stack`, `shell`, `bag`, `build`, `sim` |
+| `run.sh` | Launch the container: `stack`, `shell`, `bag`, `build`, `sim`. `SKYBETA_DETACH=1` starts `stack` detached (`docker run -d -t`) |
+| `autostart.sh` | Per drone: `sudo autostart.sh enable\|disable`, `status`, `render` — installs `skybeta-stack.service` so the stack starts at boot |
+| `stack_service.sh` | What that service runs: starts the stack detached, restarts it if the agent/slam/bridge window dies |
+| `systemd/skybeta-stack.service.in` | The unit template `autostart.sh` renders (`@USER@`, `@REPO@`) |
 | `drone_env.sh` | Library: reads `/etc/skybeta/drone.env` (per-drone identity). Sourced by `run.sh` and `doctor.sh` |
 | `drone.env.example` | Template for `/etc/skybeta/drone.env` |
 | `dds/fastdds_localhost.xml` | Default Fast DDS profile for the ROS nodes: loopback + SHM (`SKYBETA_DDS_SCOPE=local`) |
@@ -27,6 +30,7 @@ the host, and only in the phases that genuinely require root.
 | `uart_loopback_test.py` | Bench-test the Jetson TX/RX path with a jumper across pins 8 and 10 |
 | `tests/test_extlinux_fix.sh` | Unit test for the extlinux FDT rewrite |
 | `tests/test_drone_env.sh` | Unit test for the `drone.env` parser |
+| `tests/test_autostart.sh` | Unit test for the unit rendering and `run.sh`'s detached `docker run` (docker shim, no root) |
 
 ## First-time setup
 
@@ -146,6 +150,24 @@ host/run.sh shell                          # interactive bash, or exec into the 
 host/run.sh bag                            # rosbag2 into ./bags (needs WP6's record_bag.sh)
 host/run.sh sim                            # stub — WP7
 ```
+
+### At boot, per drone
+
+```bash
+sudo host/autostart.sh enable     # skybeta-stack.service: stack starts on every boot
+host/autostart.sh status
+docker exec -it skybeta-stack tmux attach -t skybeta   # look at it (Ctrl-b d detaches)
+docker rm -f skybeta-stack        # restart it, re-reading drone.env (~10 s)
+sudo host/autostart.sh disable    # back to starting it by hand
+```
+
+The service runs `stack_service.sh`, which starts `SKYBETA_DETACH=1 run.sh stack`, then polls
+the tmux panes every 5 s: a dead `agent`, `slam` or `bridge` window is logged to the journal
+(exit status + last 40 lines) and the whole stack restarts after 10 s; a dead `competitor`
+window is logged only. It also waits up to 90 s for NTP sync before starting and restarts the stack
+on a clock step (no RTC on the Jetson: a step after start makes every vision timestamp stale and
+EKF2 drops vision). Agent restarts are safe only on the patched FC firmware (`CLAUDE.md`
+bug #15). Drone 16 runs this (2026-11-03).
 
 The camera pose becomes the `base_link → oak_parent_frame` static TF and is
 passed in as `CAMERA_X/Y/Z` and `CAMERA_ROLL/PITCH/YAW`. Keep `EKF2_EV_POS_*`

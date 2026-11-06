@@ -192,8 +192,23 @@ with dai.Device() as d:
 fi
 
 # 8 -- UART traffic from the flight controller ----------------------------
+# A container that passes ${DEV} through is running the agent: sniffing the port
+# now would steal its bytes and corrupt the live session. With autostart on
+# (host/autostart.sh) the stack always holds it, so ask the stack instead.
+uart_holder=""
+if command -v docker >/dev/null 2>&1; then
+  for c in $(docker ps -q 2>/dev/null); do
+    devs="$(docker inspect -f '{{range .HostConfig.Devices}}{{.PathOnHost}} {{end}}' "$c" 2>/dev/null || true)"
+    if [[ " ${devs} " == *" ${DEV} "* ]]; then
+      uart_holder="$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | sed 's|^/||')"
+      break
+    fi
+  done
+fi
 if [[ "${DO_UART}" -eq 0 ]]; then
   warn "uart-traffic" "skipped (--no-uart)"
+elif [[ -n "${uart_holder}" ]]; then
+  warn "uart-traffic" "skipped: container '${uart_holder}' holds ${DEV} (the agent is using it; sniffing would corrupt its session). Check the link from inside: docker exec ${uart_holder} bash -lc 'source skybeta_env.sh; check_topics.sh'"
 elif [[ ! -e "${DEV}" ]]; then
   fail "uart-traffic" "${DEV} does not exist"
 elif [[ ! -r "${DEV}" ]]; then
@@ -224,7 +239,7 @@ PY
     is_xrce="$(awk '{print $4}' <<<"${sniff}")"
     is_mav="$(awk '{print $6}' <<<"${sniff}")"
     if [[ "${nbytes:-0}" -eq 0 ]]; then
-      fail "uart-traffic" "0 bytes in ${SNIFF_S}s @ ${BAUD} on ${DEV}. The TELEM2 JST-GH 1.25 mm 6-pin connector on this airframe is physically damaged and does not seat -- replace the cable before treating this as a config problem (CLAUDE.md, Hardware status). Also check the FC is powered and TX/RX are not swapped"
+      fail "uart-traffic" "0 bytes in ${SNIFF_S}s @ ${BAUD} on ${DEV}. (1) If the link worked earlier in this FC power cycle and the stack/agent has since been stopped: PX4 v1.16.2 TX DMA wedge (CLAUDE.md bug #15) -- only an FC power cycle fixes it, a reseat does not. (2) Otherwise: the TELEM2 JST-GH 1.25 mm 6-pin connector/cable (on the reference airframe it is damaged and does not seat; CLAUDE.md, Hardware status), FC power, TX/RX swapped"
     elif [[ "${is_xrce}" == "1" ]]; then
       pass "uart-traffic" "${nbytes} bytes @ ${BAUD}, 0x7E framing -> uXRCE-DDS client is talking"
     elif [[ "${is_mav}" == "1" ]]; then
@@ -232,6 +247,23 @@ PY
     else
       warn "uart-traffic" "${nbytes} bytes but neither 0x7E nor 0xFD seen -- baud mismatch? (${sniff#*HEAD })"
     fi
+  fi
+fi
+
+# 8b -- boot-time stack (host/autostart.sh) -----------------------------------
+# Informational: autostart is a per-drone choice, so "not installed" is a PASS.
+AUTOSTART_UNIT="${SKYBETA_UNIT_DIR:-/etc/systemd/system}/skybeta-stack.service"
+if [[ ! -f "${AUTOSTART_UNIT}" ]]; then
+  pass "stack-autostart" "not installed -- the stack starts by hand (host/run.sh stack)"
+else
+  as_en="$(systemctl is-enabled skybeta-stack.service 2>/dev/null || true)"
+  as_act="$(systemctl is-active skybeta-stack.service 2>/dev/null || true)"
+  if [[ "${as_en}" == "enabled" && "${as_act}" == "active" ]]; then
+    pass "stack-autostart" "enabled, running (attach: docker exec -it skybeta-stack tmux attach -t skybeta)"
+  elif [[ "${as_en}" == "enabled" ]]; then
+    warn "stack-autostart" "enabled but ${as_act:-not active} -- journalctl -u skybeta-stack -n 50"
+  else
+    warn "stack-autostart" "unit installed but ${as_en:-not enabled} -- sudo host/autostart.sh enable (or disable to remove it)"
   fi
 fi
 

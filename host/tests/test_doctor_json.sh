@@ -69,7 +69,7 @@ get() { sed -n "s/^$1=//p" <<<"${summary}"; }
 check "stdout is one JSON object"            "$(get parse)" "ok"
 check "schema"                               "$(get schema)" "1"
 check "top-level keys"                       "$(get keys)" "date,host,image,version,args,checks,pass,warn,fail,ok"
-check "12 checks (no --boot-camera)"         "$(get n_checks)" "12"
+check "13 checks (no --boot-camera)"         "$(get n_checks)" "13"
 check "every result is PASS/WARN/FAIL"       "$(get results_valid)" "True"
 check "pass/warn/fail = the checks' counts"  "$(get counts_match)" "True"
 check "ok == (fail == 0)"                    "$(get ok_matches_fail)" "True"

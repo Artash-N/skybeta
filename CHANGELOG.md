@@ -3,6 +3,23 @@
 One entry per image version (`VERSION`, tag `skybeta:<VERSION>`). The evidence behind each
 change is in [`CLAUDE.md`](CLAUDE.md); this file says what changed and what you must do.
 
+## 0.3.3 — Offboard request reaches the FC (2026-11-07, branch `fleet-ready`)
+
+### You must do this
+
+- **Move each drone to `skybeta:0.3.3` and restart its stack, disarmed.** Without it no drone takes
+  over: 0.3.2's Offboard request never reached PX4.
+
+- **Fixed: the Offboard request was addressed to system 1.** `flight_interface` sent
+  `VEHICLE_CMD_DO_SET_MODE` with `target_system` = its parameter, default 1, but every fleet FC has
+  `MAV_SYS_ID` = its drone number and PX4 drops commands for another system. Found in the first
+  hardware takeover test (drone 21, 2026-11-07): armed in Altitude, switched to Position, the request
+  went out, PX4 never answered, "did not enter Offboard within 2 s". `target_system` now defaults to 0,
+  meaning the `system_id` PX4 reports in `vehicle_status`. The unit tests and the integration test
+  missed it because their fake PX4 never checks the address; a new test does.
+- **Image:** `skybeta:0.3.2` plus the one changed file (`docker/Dockerfile.hotfix`), so drones pull a
+  tiny layer. The next full build from `Dockerfile.jetson` includes the fix the normal way.
+
 ## 0.3.2 — arm, then Position (2026-11-06, branch `fleet-ready`)
 
 ### You must do this

@@ -62,10 +62,12 @@ def make_odometry(x, y, z):
 
 
 def make_status(nav_state=VehicleStatus.NAVIGATION_STATE_OFFBOARD,
-                arming_state=VehicleStatus.ARMING_STATE_ARMED):
+                arming_state=VehicleStatus.ARMING_STATE_ARMED, system_id=0):
     msg = VehicleStatus()
     msg.nav_state = nav_state
     msg.arming_state = arming_state
+    msg.system_id = system_id
+    msg.component_id = 1 if system_id else 0
     return msg
 
 
@@ -362,6 +364,30 @@ def arm_then_position(n, order='arm_first', setpoint=True, landed=True):
     n.tick()
     n.status_cb(make_status(position, armed))
     n.tick()
+
+
+def test_offboard_request_is_addressed_to_the_fc_that_reported(ros):
+    # Fleet FCs carry MAV_SYS_ID = drone number; PX4 drops commands for any
+    # other system. Found on drone 21, 2026-11-07: the request went to 1.
+    n = auto_node()
+    try:
+        position = VehicleStatus.NAVIGATION_STATE_POSCTL
+        altitude = VehicleStatus.NAVIGATION_STATE_ALTCTL
+        n.status_cb(make_status(altitude, VehicleStatus.ARMING_STATE_DISARMED, 21))
+        n.local_position_cb(make_local_position(0.0, 0.0, 0.0))
+        n.land_detected_cb(make_land_detected(True))
+        n.odometry_cb(make_odometry(0.0, 0.0, 0.0))
+        n.tick()
+        n.pose_setpoint_cb(make_pose(0.0, 0.0, 1.0))
+        n.status_cb(make_status(altitude, VehicleStatus.ARMING_STATE_ARMED, 21))
+        n.tick()
+        n.status_cb(make_status(position, VehicleStatus.ARMING_STATE_ARMED, 21))
+        n.tick()
+        assert len(n.commands.messages) == 1
+        assert n.commands.messages[0].target_system == 21
+        assert n.commands.messages[0].target_component == 1
+    finally:
+        n.destroy_node()
 
 
 def test_arming_then_position_sends_do_set_mode(ros):

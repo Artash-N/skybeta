@@ -121,7 +121,10 @@ class FlightInterface(Node):
         self.declare_parameter('twist_setpoint_topic',
                                '/skybeta/setpoint/twist')
         self.declare_parameter('state_topic', '/skybeta/state')
-        self.declare_parameter('target_system', 1)
+        # 0 = address PX4 by the system ID it reports in vehicle_status. Each
+        # fleet FC has MAV_SYS_ID = its drone number, and PX4 ignores commands
+        # for any other system, so a fixed 1 only ever worked on drone 1.
+        self.declare_parameter('target_system', 0)
         self.declare_parameter('warn_period_s', 2.0)
         # Anchoring: off by default, so the conversion is exactly the
         # documented ENU->NED rotation. See frames.setpoint_position_enu_to_ned
@@ -480,12 +483,23 @@ class FlightInterface(Node):
         command.command = VehicleCommand.VEHICLE_CMD_DO_SET_MODE
         command.param1 = PX4_MODE_FLAG_CUSTOM_ENABLED
         command.param2 = PX4_CUSTOM_MAIN_MODE_OFFBOARD
-        command.target_system = self.target_system
-        command.target_component = 1
-        command.source_system = self.target_system
+        system, component = self._px4_address()
+        command.target_system = system
+        command.target_component = component
+        command.source_system = system
         command.source_component = 1
         command.from_external = True
         self.command_pub.publish(command)
+
+    def _px4_address(self):
+        """(system, component) to address commands to: the target_system
+        parameter if set, else what PX4 reports about itself, else (1, 1)."""
+        status = self.vehicle_status
+        if self.target_system:
+            return self.target_system, 1
+        if status is not None and int(status.system_id) > 0:
+            return int(status.system_id), int(status.component_id) or 1
+        return 1, 1
 
     def _step_auto_offboard(self):
         status = self.vehicle_status

@@ -7,8 +7,8 @@ NOTES FOR THE AGENT BUILDING THE PAGE (do not publish this section)
 - Audience: competition teams who have just been given a drone and know basic Linux.
 - Keep the rules prominent, near the top of the page.
 - Show "HOW WE START YOUR DRONE" as a highlighted box directly under the intro. Keep the order
-  of its steps exactly as written: the software only takes over if the drone is already in
-  Position at the moment it is armed.
+  of its steps exactly as written: the software only takes over when the pilot switches to
+  Position after arming, with the drone still on the ground.
 - Anything in {CURLY_BRACES} is a placeholder that an organiser must fill in. If a value is
   missing, leave a visible "ask the organisers" note. Never invent one.
 - NEVER put these on a public page: the Jetson login password, the Wi-Fi password, Tailscale
@@ -36,8 +36,8 @@ Need help? Message Kelvin on Slack (kelvinkn@stanford.edu).
 HOW WE START YOUR DRONE
 
   1. We put your drone in the cage.
-  2. The safety pilot switches to Position mode.
-  3. The safety pilot arms the drone.
+  2. The safety pilot arms the drone.
+  3. The safety pilot switches to Position mode.
   4. Your code takes over from there.
 
 That is everything we do. Nobody logs in or types a command, so your code must already be running
@@ -212,7 +212,7 @@ private, create a new private repository and push your packages there.
 
   1. Power up and keep the drone still for the first minute.
   2. Your code starts sending setpoints.
-  3. The safety pilot selects Position and arms. Your code cannot arm the drone.
+  3. The safety pilot arms, then switches to Position. Your code cannot arm the drone.
   4. The drone switches to autonomy once, and your code takes off and flies.
   5. The pilot can take over at any moment with the sticks, the mode switch or the kill switch.
 
@@ -225,8 +225,9 @@ Read section 4 of the competitor guide with your safety pilot before your first 
 7. HOW YOUR DRONE IS TESTED
 
   1. We put your drone in the cage.
-  2. The safety pilot selects Position and arms.
-  3. We expect your drone to take over from there. Your code takes off and flies with nothing
+  2. The safety pilot arms the drone, on the ground, with the mode switch on Altitude.
+  3. The safety pilot switches to Position, within a few seconds.
+  4. We expect your drone to take over from there. Your code takes off and flies with nothing
      more from us.
 
 All of this has to be true before the pilot arms:
@@ -238,9 +239,10 @@ All of this has to be true before the pilot arms:
   - Your node is already publishing setpoints, at least once a second, before arming.
   - Vision is tracking, so the drone has a valid position. Leave it still for the first minute.
 
-Takeover happens only at the moment of arming. The drone must already be in Position: if it is
-armed in another mode and then switched to Position, your code does not take over. If anything
-above is missing, the drone stays in Position under the pilot, and the log says:
+Takeover happens when the pilot switches to Position after arming, with the drone on the ground.
+It happens once per arming. Arming with the switch already on Position does not start your code,
+and neither does switching to Position in the air. If anything above is missing, the drone stays
+in Position under the pilot, and the log says:
 
     auto offboard: staying out of Offboard: <reason>
 

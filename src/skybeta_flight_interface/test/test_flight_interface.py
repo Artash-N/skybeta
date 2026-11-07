@@ -16,7 +16,7 @@ from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry
 from std_srvs.srv import Trigger
 
-from px4_msgs.msg import VehicleCommand, VehicleLocalPosition, VehicleStatus
+from px4_msgs.msg import VehicleCommand, VehicleLandDetected, VehicleLocalPosition, VehicleStatus
 
 from skybeta_flight_interface.flight_interface import FlightInterface
 
@@ -338,23 +338,36 @@ def auto_node():
     return n
 
 
-def fly_to_arming(n, position_mode=True, setpoint=True):
+def make_land_detected(landed):
+    msg = VehicleLandDetected()
+    msg.landed = landed
+    return msg
+
+
+def arm_then_position(n, order='arm_first', setpoint=True, landed=True):
+    """The pilot's sequence. 'arm_first' is the go signal, 'position_first' is not."""
     position = VehicleStatus.NAVIGATION_STATE_POSCTL
-    n.status_cb(make_status(position, VehicleStatus.ARMING_STATE_DISARMED))
+    altitude = VehicleStatus.NAVIGATION_STATE_ALTCTL
+    armed = VehicleStatus.ARMING_STATE_ARMED
+    first = altitude if order == 'arm_first' else position
+    n.status_cb(make_status(first, VehicleStatus.ARMING_STATE_DISARMED))
     n.local_position_cb(make_local_position(0.0, 0.0, 0.0))
+    if landed is not None:
+        n.land_detected_cb(make_land_detected(landed))
     n.odometry_cb(make_odometry(0.0, 0.0, 0.0))
     n.tick()
     if setpoint:
         n.pose_setpoint_cb(make_pose(0.0, 0.0, 1.0))
-    mode = position if position_mode else VehicleStatus.NAVIGATION_STATE_ALTCTL
-    n.status_cb(make_status(mode, VehicleStatus.ARMING_STATE_ARMED))
+    n.status_cb(make_status(first, armed))
+    n.tick()
+    n.status_cb(make_status(position, armed))
     n.tick()
 
 
-def test_arming_in_position_sends_do_set_mode(ros):
+def test_arming_then_position_sends_do_set_mode(ros):
     n = auto_node()
     try:
-        fly_to_arming(n)
+        arm_then_position(n)
         assert len(n.commands.messages) == 1
         command = n.commands.messages[0]
         assert command.command == VehicleCommand.VEHICLE_CMD_DO_SET_MODE
@@ -363,25 +376,26 @@ def test_arming_in_position_sends_do_set_mode(ros):
         n.destroy_node()
 
 
-def test_arming_elsewhere_or_without_team_code_stays_out(ros):
-    for kw in ({'position_mode': False}, {'setpoint': False}):
+def test_wrong_order_in_the_air_or_without_team_code_stays_out(ros):
+    for kw in ({'order': 'position_first'}, {'setpoint': False},
+               {'landed': False}, {'landed': None}):
         n = auto_node()
         try:
-            fly_to_arming(n, **kw)
+            arm_then_position(n, **kw)
             assert n.commands.messages == []
         finally:
             n.destroy_node()
 
 
 def test_auto_offboard_is_off_unless_asked_for(node):
-    fly_to_arming(node)
+    arm_then_position(node)
     assert node.commands.messages == []
 
 
 def test_no_arm_command_is_ever_sent(ros):
     n = auto_node()
     try:
-        fly_to_arming(n)
+        arm_then_position(n)
         for _ in range(30):
             n.tick()
         assert all(c.command != VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM

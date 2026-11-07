@@ -86,8 +86,9 @@ value.
 ## How your drone is tested
 
 1. We put your drone in the cage.
-2. The safety pilot selects **Position** and arms.
-3. **We expect your drone to take over from there.** Your code takes off and flies with nothing
+2. The safety pilot **arms** the drone, on the ground, with the mode switch on Altitude.
+3. The safety pilot switches to **Position**, within a few seconds.
+4. **We expect your drone to take over from there.** Your code takes off and flies with nothing
    more from us.
 
 So all of this has to be true before the pilot arms:
@@ -99,9 +100,10 @@ So all of this has to be true before the pilot arms:
 - **Your node is already publishing setpoints**, at least once a second, before arming.
 - **Vision is tracking**, so PX4 has a valid position. Leave the drone still for the first minute.
 
-**Takeover happens only at the moment of arming.** The drone must already be in Position: if it
-is armed in another mode and then switched to Position, your code does not take over. If anything
-above is missing, the drone stays in Position under the pilot and `flight_interface` logs
+**Takeover happens when the pilot switches to Position after arming, with the drone on the
+ground.** It happens once per arming. Arming with the switch already on Position does not start your
+code, and neither does switching to Position in the air. If anything above is missing, the drone
+stays in Position under the pilot and `flight_interface` logs
 `auto offboard: staying out of Offboard: <reason>`. Your code also has to take off within 10
 seconds of arming, or PX4 disarms the drone.
 
@@ -157,7 +159,7 @@ behaviour.
 1. **Power up and keep the drone still for the first minute.** The stack starts by itself, and
    position and heading are measured from wherever the drone was when it started.
 2. **Your node starts publishing setpoints** in the `competitor` window of the stack.
-3. **The safety pilot selects Position and arms.** The Jetson has no way to arm the vehicle.
+3. **The safety pilot arms, then switches to Position.** The Jetson has no way to arm the vehicle.
 4. **The Jetson enters Offboard once, and your code takes off and flies.** The flight interface
    clamps altitude and twist speed and sends your setpoints to PX4. It does not limit how far
    you go horizontally: staying inside the flying area is your code's job and the pilot's.
@@ -206,7 +208,7 @@ OAK-D-S2  ──USB3──▶  depthai-ros v3 driver     /oak/{left,right}/image
 ```
 
 **There is always a safety pilot on RC.** The flight interface has **no arm path**. The pilot
-selects Position and arms; the interface then enters Offboard, and the pilot can take the vehicle
+arms and switches to Position; the interface then enters Offboard, and the pilot can take the vehicle
 back at any instant with the sticks or the mode switch. Nothing you write may assume otherwise.
 
 ---

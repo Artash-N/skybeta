@@ -29,9 +29,9 @@ ARGUMENTS = [
      'OffboardControlMode heartbeat rate -- PX4 needs > 2 Hz'),
     ('allow_mode_request', 'false',
      'enable /skybeta/request_offboard. SIM ONLY: on a real vehicle Offboard '
-     'follows the pilot arming in Position'),
+     'follows the pilot arming, then switching to Position'),
     ('auto_offboard_on_arm', 'true',
-     'enter Offboard once when the pilot arms in Position. false: the vehicle '
+     'enter Offboard once when the pilot arms, then switches to Position. false: the vehicle '
      'stays in Position under the pilot'),
     ('odometry_topic', '/visual_slam/tracking/odometry',
      'source of the ENU pose the altitude band is measured against'),

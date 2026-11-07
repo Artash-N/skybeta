@@ -104,6 +104,8 @@ FMU_ENDPOINTS = {
     'vehicle_status': ('out', 'vehicle_status', 'VehicleStatus'),
     'vehicle_local_position': ('out', 'vehicle_local_position',
                                'VehicleLocalPosition'),
+    'vehicle_land_detected': ('out', 'vehicle_land_detected',
+                              'VehicleLandDetected'),
 }
 
 

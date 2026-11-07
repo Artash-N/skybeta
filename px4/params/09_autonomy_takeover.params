@@ -3,7 +3,7 @@
 # STAGE 9 - FLEET POLICY: the pilot can take the vehicle back from autonomy with the sticks.
 # Independent of vision, UART and the container. Loads on every FC.
 #
-# The competition flow is: pilot selects Position and arms, the flight interface then
+# The competition flow is: pilot arms, then switches to Position, the flight interface then
 # requests Offboard (auto_offboard_on_arm). So the mode switch is already on Position
 # while team code flies, and PX4 only acts on the switch when it CHANGES position
 # (manual_control: switches.mode_slot != _previous_switches.mode_slot). The switch can

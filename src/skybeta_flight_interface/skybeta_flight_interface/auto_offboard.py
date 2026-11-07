@@ -1,17 +1,21 @@
 """When to ask PX4 for Offboard after the pilot arms.
 
-The flow on the vehicle: the pilot selects Position and arms, and the Jetson then
-enters Offboard, so arming is the go signal. This module decides whether this
-arming may do that. It has no ROS in it, so every rule is tested on its own.
+The flow on the vehicle: the pilot arms on the ground, then switches to Position,
+and the Jetson enters Offboard, so that switch is the go signal. This module
+decides whether this switch may do that. It has no ROS in it, so every rule is
+tested on its own.
 
 The rules exist because the failure is a drone flown by team code when the pilot
 did not expect it:
 
-* **Only a disarmed -> armed transition that we saw.** A flight interface that
-  starts up, or a link that comes back, and finds the vehicle already armed does
-  nothing: the pilot may be flying it.
-* **Only from Position.** Arming in Manual or Altitude is how a pilot flies with
-  no autonomy.
+* **Only after a disarmed -> armed transition that we saw.** A flight interface
+  that starts up, or a link that comes back, and finds the vehicle already armed
+  does nothing: the pilot may be flying it.
+* **Only on a switch into Position made after arming.** Arming with the switch
+  already on Position gives no autonomy: that is how a pilot flies by hand. Moving
+  out of Position and back on the ground counts as the switch.
+* **Only on the ground.** A pilot flying by hand who flips to Position in the air
+  wants position hold, not team code. That flip uses up this arming's attempt.
 * **One attempt per arming.** Once the pilot takes the vehicle back, nothing here
   can take it again until it has been disarmed.
 * **Only with valid position, a live setpoint and no hold in force.** With no team
@@ -29,6 +33,7 @@ Inputs = namedtuple('Inputs', [
     'link',             # vehicle_status is arriving
     'armed',
     'in_position',      # nav_state is Position
+    'landed',           # PX4 says landed; None until vehicle_land_detected arrives
     'offboard',         # nav_state is Offboard
     'position_valid',   # PX4 has a valid local position
     'setpoint_age_s',   # seconds since the team's last setpoint, None if never
@@ -37,6 +42,8 @@ Inputs = namedtuple('Inputs', [
 
 WAIT_DISARMED = 'wait_disarmed'   # never saw this vehicle disarmed: not ours to touch
 READY = 'ready'                   # disarmed: the next arming counts
+ARMED_IN_POSITION = 'armed_in_position'   # armed on Position: the pilot's, until it leaves
+ARMED = 'armed'                   # armed, off Position: the next switch to it is the go signal
 REQUESTING = 'requesting'
 DONE = 'done'                     # this arming has had its chance
 
@@ -51,9 +58,11 @@ class AutoOffboard:
         self._next_send = 0.0
 
     def _refusal(self, s):
-        """Why this arming may not enter Offboard, or None."""
-        if not s.in_position:
-            return 'not armed in Position'
+        """Why this switch to Position may not enter Offboard, or None."""
+        if s.landed is None:
+            return 'no landed state from PX4 (vehicle_land_detected)'
+        if not s.landed:
+            return 'in the air: Position stays with the pilot'
         if not s.position_valid:
             return 'no valid local position (is VIO tracking?)'
         if s.frozen:
@@ -76,6 +85,19 @@ class AutoOffboard:
             self.state = READY
             return False, None
         if self.state == READY:
+            if s.in_position:
+                self.state = ARMED_IN_POSITION
+                return False, ('armed already in Position: no autonomy. '
+                               'To start it, arm first, then switch to Position')
+            self.state = ARMED
+            return False, 'armed: waiting for the switch to Position'
+        if self.state == ARMED_IN_POSITION:
+            if not s.in_position:
+                self.state = ARMED
+            return False, None
+        if self.state == ARMED:
+            if not s.in_position:
+                return False, None
             self.state = DONE
             why = self._refusal(s)
             if why:
@@ -83,7 +105,7 @@ class AutoOffboard:
             self.state = REQUESTING
             self._deadline = s.now_s + WINDOW_S
             self._next_send = s.now_s + RETRY_S
-            return True, 'armed in Position: requesting Offboard'
+            return True, 'switched to Position after arming: requesting Offboard'
         if self.state == REQUESTING:
             if s.offboard:
                 self.state = DONE

@@ -163,7 +163,7 @@ A JSON string at 5 Hz. Parse it with `json.loads(msg.data)`.
 ```
 
 - `offboard_active` — **wait for this before you command anything.** It goes true once the
-  flight interface has entered Offboard (it asks when the pilot arms in Position, §4),
+  flight interface has entered Offboard (it asks when the pilot arms and then switches to Position, §4),
   and false the instant the pilot takes over.
 - `odom_enu` is cuVSLAM's position; `local_enu` is EKF2's own estimate reported back in ENU.
   They should track each other. If they diverge, the vision link is degrading.
@@ -178,9 +178,9 @@ A JSON string at 5 Hz. Parse it with `json.loads(msg.data)`.
 
 ## 4. RC, arming and autonomy — the procedure
 
-**The flight interface never arms.** There is no arm service. The pilot arming in **Position** is
-the go signal: `flight_interface` then asks PX4 for Offboard, once, and your node flies the
-vehicle, **including the takeoff**. There is no manual takeoff and no RC switch for Offboard.
+**The flight interface never arms.** There is no arm service. The pilot arming, **then switching to
+Position** on the ground, is the go signal: `flight_interface` then asks PX4 for Offboard, once, and
+your node flies the vehicle, **including the takeoff**. There is no manual takeoff and no RC switch for Offboard.
 
 Offboard is PX4's name for "take commands from the Jetson". In Position, PX4 follows the sticks and
 ignores your setpoints.
@@ -196,21 +196,23 @@ Before every flight:
    - `/visual_slam/tracking/odometry` is publishing and `odom_enu` moves sensibly when you
      carry the vehicle,
    - your node is publishing at least once a second.
-5. **Pilot selects Position and arms**, throttle low.
-6. `offboard_active` goes true, and your node takes off.
+5. **Pilot arms** with the mode switch on Altitude, throttle low.
+6. **Pilot switches to Position**, within a few seconds, throttle still low.
+7. `offboard_active` goes true, and your node takes off.
 
 **It leaves the ground as soon as Offboard starts.** Every pose is floored at `min_altitude_m`, so
 any pose lifts the vehicle to at least 0.3 m, even one that says "stay where you are". A twist
 takes off only if it has an upward component. If the vehicle has not taken off 10 s after arming, PX4
-disarms it (`COM_DISARM_PRFLT`).
+disarms it (`COM_DISARM_PRFLT`), and that clock includes the time before the switch to Position.
 
-Offboard is requested only when all of these hold at the moment of arming. If one does not, the
-vehicle stays in Position under the pilot, and `flight_interface` logs
+Offboard is requested only when all of these hold at the moment of the switch to Position. If one
+does not, the vehicle stays in Position under the pilot, and `flight_interface` logs
 `auto offboard: staying out of Offboard: <reason>`.
 
 | Condition | Why |
 |---|---|
-| Armed in **Position** | Arming in Altitude or Manual is how a pilot flies with no autonomy |
+| Armed **first**, then switched to Position | Arming with the switch already on Position is how a pilot flies with no autonomy |
+| PX4 reports the vehicle **landed** | Flipping to Position in the air is a pilot asking for position hold |
 | PX4 has a valid local position | With no VIO there is nothing to fly on |
 | A setpoint from your node in the last second | No team code, no autonomy |
 | `/skybeta/hold` not in force | |
@@ -238,7 +240,8 @@ has no land command.
 
 Losing the RC link triggers PX4's failsafe, in Offboard as well (`COM_RCL_EXCEPT` = 0).
 
-To fly with no autonomy at all, arm in Altitude, or launch with `auto_offboard_on_arm:=false`.
+To fly with no autonomy at all, arm with the switch already on Position, or launch with
+`auto_offboard_on_arm:=false`. Flying off in Altitude and flipping to Position in the air is also safe.
 
 `/skybeta/request_offboard` exists for SITL, where there is no pilot. It is refused unless
 `allow_mode_request:=true`, and even then it only asks — it never arms.
@@ -486,7 +489,7 @@ odometry topic; EKF2's estimate comes back in `/skybeta/state` as `local_enu`.
    after an `OffboardControlMode` heartbeat. This never stops, even with no target: a stream
    that stalls drops PX4 out of Offboard.
 5. `_step_auto_offboard()`, also each tick, feeds `auto_offboard.py`, which decides whether this
-   arming may enter Offboard. All the §4 rules are in that one small file.
+   switch to Position may enter Offboard. All the §4 rules are in that one small file.
 6. `publish_state()` publishes `/skybeta/state` at 5 Hz.
 
 **Your node** is `competitor_example/square_mission.py` until you replace it. It is a state machine

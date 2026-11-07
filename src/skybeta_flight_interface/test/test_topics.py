@@ -25,6 +25,7 @@ MSGS_1_14 = {
         'uint8 ARMING_STATE_ARMED = 2\n'
     ),
     'VehicleLocalPosition': 'uint64 timestamp\nbool xy_valid\n',
+    'VehicleLandDetected': 'uint64 timestamp\nbool landed\n',
     'OffboardControlMode': 'uint64 timestamp\nbool position\n',
     'TrajectorySetpoint': 'uint64 timestamp\nfloat32[3] position\n',
     'VehicleCommand': 'uint64 timestamp\nuint32 command\n',
@@ -39,6 +40,7 @@ MSGS_1_16 = {
         'uint64 timestamp\n'
         'uint8 ARMING_STATE_ARMED    = 2\n'
     ),
+    'VehicleLandDetected': 'uint32 MESSAGE_VERSION = 0\nbool landed\n',
     'VehicleLocalPosition': (
         '# Fused local position in NED.\n'
         'uint32 MESSAGE_VERSION = 0\n'
@@ -140,6 +142,7 @@ def test_topics_on_1_14_have_no_suffix(msgs_1_14):
         'vehicle_command': '/fmu/in/vehicle_command',
         'vehicle_status': '/fmu/out/vehicle_status',
         'vehicle_local_position': '/fmu/out/vehicle_local_position',
+        'vehicle_land_detected': '/fmu/out/vehicle_land_detected',
     }
 
 
@@ -152,13 +155,14 @@ def test_topics_on_1_16_suffix_only_vehicle_status(msgs_1_16):
         # The one that actually moved in v1.16.
         'vehicle_status': '/fmu/out/vehicle_status_v1',
         'vehicle_local_position': '/fmu/out/vehicle_local_position',
+        'vehicle_land_detected': '/fmu/out/vehicle_land_detected',
     }
 
 
 def test_endpoints_cover_every_publisher_and_subscriber():
     assert set(FMU_ENDPOINTS) == {
         'offboard_control_mode', 'trajectory_setpoint', 'vehicle_command',
-        'vehicle_status', 'vehicle_local_position'}
+        'vehicle_status', 'vehicle_local_position', 'vehicle_land_detected'}
     for direction, base, msg in FMU_ENDPOINTS.values():
         assert direction in ('in', 'out')
         assert snake_case(msg) == base

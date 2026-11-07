@@ -3,6 +3,21 @@
 One entry per image version (`VERSION`, tag `skybeta:<VERSION>`). The evidence behind each
 change is in [`CLAUDE.md`](CLAUDE.md); this file says what changed and what you must do.
 
+## 0.3.2 — arm, then Position (2026-11-06, branch `fleet-ready`)
+
+### You must do this
+
+- **Move each drone to the `skybeta:0.3.2` image.** The pilot's order is now arm, **then** switch to
+  Position, within 10 s of arming (`COM_DISARM_PRFLT`). No FC parameter changes.
+
+- **The go signal moved from arming to the switch to Position after arming.** Requested by the fleet
+  owner: arming with the switch already on Position (0.3.1's go signal) now gives no autonomy, and
+  that is how a pilot flies by hand.
+- **New rule: the vehicle must be on the ground.** Otherwise a pilot flying in Altitude who flips to
+  Position to hold would hand the vehicle to team code in the air. `flight_interface` subscribes to
+  `/fmu/out/vehicle_land_detected` (in the patched firmware's topic list), and `/skybeta/state` gains
+  `landed`. Unknown counts as not landed. A team launch file needs no change. It has not flown.
+
 ## 0.3.1 — autonomy after arming (2026-11-06, branch `fleet-ready`)
 
 ### You must do this

@@ -207,8 +207,8 @@ when the FC is unpowered or the cable is the suspect one (§1.1), and `oakd-usb`
 
 ## 4. RC and the safety pilot's controls
 
-There is **always a safety pilot on RC**. The flight interface has no arm path. The pilot selects
-Position and arms, the interface then enters Offboard, and the pilot can take the vehicle back at
+There is **always a safety pilot on RC**. The flight interface has no arm path. The pilot arms and
+switches to Position, the interface then enters Offboard, and the pilot can take the vehicle back at
 any instant with the sticks or the mode switch. Nothing in the software substitutes for these checks.
 
 - [ ] Receiver **bound** to this vehicle's transmitter, and the transmitter's model
@@ -249,8 +249,8 @@ Ordered so a failure stops you before the props spin.
        only way to explain a bad one afterwards, and it costs nothing on a good one.
 8. [ ] Kill switch tested this session (§4).
 9. [ ] Safety pilot has the transmitter, is standing clear, and has said so out loud.
-10. [ ] Pilot selects Position and arms, throttle low. Team code takes off from here, so be ready
-        to raise the throttle to take over (competitor guide §4).
+10. [ ] Pilot arms in Altitude, throttle low, then switches to Position within a few seconds. Team
+        code takes off from here, so be ready to raise the throttle to take over (competitor guide §4).
 
 ---
 

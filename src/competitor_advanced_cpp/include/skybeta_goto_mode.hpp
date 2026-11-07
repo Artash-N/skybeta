@@ -8,7 +8,7 @@
  * ------------------------------------------------
  * The Python track (skybeta_flight_interface + competitor_example) drives
  * PX4's built-in Offboard mode: your node streams setpoints, the safety pilot
- * arms in Position, and the flight interface enters Offboard and clamps
+ * arms, then switches to Position, and the flight interface enters Offboard and clamps
  * everything you ask for to the safety envelope first.
  *
  * This is different. px4_ros2_cpp registers a *new flight mode* with PX4 over

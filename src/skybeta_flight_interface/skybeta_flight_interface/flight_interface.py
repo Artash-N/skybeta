@@ -20,9 +20,9 @@ everything between those topics and PX4:
 What it deliberately does NOT do
 --------------------------------
 **It never arms.**  There is no arm service at all: the safety pilot on RC arms
-the vehicle, and that is the go signal.  With ``auto_offboard_on_arm`` set, an
-arming in Position is followed by one request for Offboard (``auto_offboard.py``
-has the rules).  The pilot takes the vehicle back with the mode switch or the
+the vehicle.  With ``auto_offboard_on_arm`` set, the pilot's switch to Position
+after arming, on the ground, is the go signal: it is followed by one request for
+Offboard (``auto_offboard.py`` has the rules).  The pilot takes the vehicle back with the mode switch or the
 sticks (``COM_RC_OVERRIDE`` = 3), and nothing here requests Offboard again until
 it has been disarmed.  The optional ``/skybeta/request_offboard`` service sends
 the same ``VEHICLE_CMD_DO_SET_MODE(1, 6)`` on demand, only when the
@@ -64,6 +64,7 @@ from px4_msgs.msg import (
     OffboardControlMode,
     TrajectorySetpoint,
     VehicleCommand,
+    VehicleLandDetected,
     VehicleLocalPosition,
     VehicleStatus,
 )
@@ -165,6 +166,7 @@ class FlightInterface(Node):
         self.odom_position_enu = None
         self.px4_origin_ned = None      # captured with the odom origin
         self.local_position = None
+        self.landed = None              # None until PX4 reports it
         self.vehicle_status = None
         self.last_status_time = None
         self._last_warn_time = {}
@@ -207,6 +209,9 @@ class FlightInterface(Node):
         self.local_position_sub = self.create_subscription(
             VehicleLocalPosition, self.topics['vehicle_local_position'],
             self.local_position_cb, px4_sub_qos)
+        self.land_detected_sub = self.create_subscription(
+            VehicleLandDetected, self.topics['vehicle_land_detected'],
+            self.land_detected_cb, px4_sub_qos)
 
         # -- competitor interface --------------------------------------
         self.pose_sub = self.create_subscription(
@@ -242,7 +247,7 @@ class FlightInterface(Node):
             f'  resolved topics:\n    {topic_map}\n'
             f'  mode requests: '
             f'{"ENABLED (sim only!)" if self.allow_mode_request else "disabled"}'
-            f'\n  Offboard after arming in Position: '
+            f'\n  Offboard on the switch to Position after arming: '
             f'{"ON" if self.auto_offboard.enabled else "off"}'
         )
         self.get_logger().info(
@@ -315,6 +320,9 @@ class FlightInterface(Node):
 
     def local_position_cb(self, msg):
         self.local_position = msg
+
+    def land_detected_cb(self, msg):
+        self.landed = bool(msg.landed)
 
     def odometry_cb(self, msg):
         p = msg.pose.pose.position
@@ -453,8 +461,9 @@ class FlightInterface(Node):
             response.success = False
             response.message = (
                 'refused: allow_mode_request is false. On a real vehicle '
-                'Offboard follows the pilot arming in Position '
-                '(auto_offboard_on_arm); this service exists for SITL only.')
+                'Offboard follows the pilot arming, then switching to '
+                'Position (auto_offboard_on_arm); this service exists for '
+                'SITL only.')
             self.get_logger().warn(response.message)
             return response
         self._send_offboard_command()
@@ -490,6 +499,7 @@ class FlightInterface(Node):
             in_position=bool(
                 status is not None and status.nav_state
                 == VehicleStatus.NAVIGATION_STATE_POSCTL),
+            landed=self.landed,
             offboard=self.offboard_active,
             position_valid=self._current_local_ned() is not None,
             setpoint_age_s=age,
@@ -594,6 +604,7 @@ class FlightInterface(Node):
             'stamp': round(self.now_s(), 3),
             'px4_link': self.px4_link,
             'armed': self.armed,
+            'landed': self.landed,
             'nav_state': nav_state,
             'nav_state_name': NAV_STATE_NAMES.get(nav_state, str(nav_state)),
             'offboard_active': self.offboard_active,

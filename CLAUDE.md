@@ -26,8 +26,8 @@ canonical hardware/PX4 procedure; [`README.md`](README.md) for the container wor
   pipeline (agent, cuVSLAM, bridge) never sources that overlay.
 - **`src/`** — `oakd_vslam_bringup` (cuVSLAM launch + the PX4 odometry bridge),
   `skybeta_flight_interface` (the competitor-facing offboard wrapper: 10 Hz heartbeat, ENU↔NED,
-  altitude + speed clamp, **no geofence** since 0.3.0, **no arm path**, enters Offboard once after
-  the pilot arms in Position: `auto_offboard.py`), `competitor_example` (Python reference mission),
+  altitude + speed clamp, **no geofence** since 0.3.0, **no arm path**, enters Offboard once when
+  the pilot arms, then switches to Position on the ground: `auto_offboard.py`), `competitor_example` (Python reference mission),
   `competitor_advanced_cpp` (px4_ros2_cpp custom mode). Competitors add their own packages
   in the team workspace, not here.
 - **`px4/`** — pinned v1.16.2 firmware + staged parameter files; **`tools/`** — `param_diff.py`,
@@ -384,7 +384,7 @@ sensor (Hardware status). In `param_diff` STAGED and `flash.sh`'s default set; o
 ### Fleet policy — `09_autonomy_takeover.params` (2026-11-05)
 
 `COM_RC_OVERRIDE = 3` (default 1): bit 1 lets the sticks take over from Offboard. Needed because of
-the competition flow: the pilot selects Position and arms, then `flight_interface` requests Offboard
+the competition flow: the pilot arms, then switches to Position, then `flight_interface` requests Offboard
 (`auto_offboard_on_arm`, rules in `auto_offboard.py`), so the mode switch is already on Position
 during autonomy and PX4 only acts on it when it **changes** (`ManualControl.cpp`,
 `mode_slot != _previous_switches.mode_slot`). Checked in the v1.16 source, not assumed: Offboard can

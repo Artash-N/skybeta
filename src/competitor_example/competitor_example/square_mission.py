@@ -1,7 +1,7 @@
 """THE FILE TO COPY. A worked example of a skybeta competitor node.
 
 Mission: wait until the flight interface has entered Offboard (it does that once,
-when the safety pilot arms in Position), hover at 1.5 m for 5 s, fly a 5 m square,
+when the safety pilot arms, then switches to Position), hover at 1.5 m for 5 s, fly a 5 m square,
 then hold.  Everything it does is done through two topics:
 
     subscribe  /skybeta/state                     what PX4 is doing
@@ -31,7 +31,7 @@ command one.
 
 Safety
 ------
-The safety pilot selects Position and arms; the flight interface then enters
+The safety pilot arms, then switches to Position; the flight interface then enters
 Offboard, and this node takes off from the ground.  The pilot can take the
 vehicle back at any moment with the mode switch or the sticks.  This node must
 therefore **wait** until ``/skybeta/state`` reports ``offboard_active`` before
@@ -102,7 +102,7 @@ class SquareMission(Node):
             f'competitor_example ready: hover {self.hover_altitude:.2f} m for '
             f'{self.hover_seconds:.0f} s, then a {self.side:.1f} m square '
             f'(arrive within {self.arrival_radius:.2f} m).\n'
-            'Waiting for the safety pilot to arm in Position...')
+            'Waiting for the safety pilot to arm, then switch to Position...')
 
     # ------------------------------------------------------------------
     # inputs
@@ -217,7 +217,7 @@ class SquareMission(Node):
             self.info_once(
                 'waiting',
                 'holding at the current position until the safety pilot '
-                'arms in Position.')
+                'arms and switches to Position.')
             # Command where we already are, so the moment Offboard starts the
             # vehicle holds instead of jumping to a stale target. This stream is
             # also what lets the flight interface enter Offboard at all.

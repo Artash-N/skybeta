@@ -89,7 +89,7 @@ You have root on your drone so that you can work freely. These rules still apply
   - The login user: dronehacks
   - The login password and the Wi-Fi password, which the organisers give you in person.
   - A laptop with an SSH client. macOS, Linux and Windows 10 or later have one built in.
-  - A USB cable that carries data, for the Jetson's USB-C port.
+  - A USB cable that carries data, for the Jetson's USB-C port, as a backup to Wi-Fi.
 
   {TEAM_TABLE}
 
@@ -100,18 +100,19 @@ You have root on your drone so that you can work freely. These rules still apply
 
 3. CONNECT TO YOUR DRONE
 
-The first time, use the USB cable. It always works, and it tells you the drone's Wi-Fi address.
+Your drone joins DroneHacks Wifi by itself, so try Wi-Fi first. USB is the backup.
 
 Step 1. Plug in the OAK-D camera, then power on the drone and wait about a minute for the Jetson
   to boot. Keep the drone still while it starts.
 
-Step 2. Connect your laptop to the Jetson's USB-C port.
+Step 2. Connect your laptop to DroneHacks Wifi (the name is case-sensitive).
 
-Step 3. Log in over USB. Every Jetson uses this same address over USB:
+Step 3. Log in with your drone's name, using your own two-digit number:
 
-    ssh dronehacks@192.168.55.1
+    ssh dronehacks@skybeta-NN.local
 
-  Type yes if asked to trust the host, then enter the login password.
+  Type yes if asked to trust the host, then enter the login password. If it says the name cannot
+  be found, try again after a few seconds. If it still fails, use USB (below).
 
 Step 4. Check that you are on your own drone:
 
@@ -119,21 +120,29 @@ Step 4. Check that you are on your own drone:
 
   It must show skybeta-NN with your drone number. If it does not, log out and tell the organisers.
 
-Step 5. Find the drone's Wi-Fi address:
+Step 5. Note the drone's Wi-Fi address, in case the name stops working:
 
     ip -4 -br addr show wlP1p1s0
 
-  The address is the number before the slash, for example 10.0.0.42 in 10.0.0.42/24.
-
-Step 6. Connect your laptop to the same Wi-Fi network as the drone: DroneHacks Wifi (the name is
-  case-sensitive).
-
-Step 7. From now on, log in over Wi-Fi with no cable:
+  The address is the number before the slash, for example 192.168.68.42 in 192.168.68.42/22. You
+  can then log in with:
 
     ssh dronehacks@<your-drone's-wifi-address>
 
-The Wi-Fi address can change after a restart. If it stops working, go back to USB and repeat
-step 5.
+  The Wi-Fi address can change after a restart, so go back to the name or to USB if it stops
+  working.
+
+If Wi-Fi does not work, use USB:
+
+  1. Connect your laptop to the Jetson's USB-C port.
+  2. Log in. Every Jetson uses this same address over USB:
+
+    ssh dronehacks@192.168.55.1
+
+  3. Run steps 4 and 5 above.
+
+USB login can stop working after the cable has been unplugged. If it does, restart the drone and
+try again. If neither Wi-Fi nor USB works, message Kelvin on Slack.
 
 Optional: to log in without typing the password, run this once on your laptop:
 
@@ -254,11 +263,12 @@ Rehearse this whole sequence with the props off before your test.
 8. IF SOMETHING GOES WRONG
 
   ssh: connection timed out over Wi-Fi
-    Check that your laptop is on the same network as the drone. Use USB to confirm the drone's
-    current Wi-Fi address.
+    Check that your laptop is on DroneHacks Wifi. The drone's address may have changed: try
+    skybeta-NN.local, or use USB to read its current address.
 
   ssh over USB does not connect
     Wait a full minute after power-on and try a different cable: many USB cables only charge.
+    If it worked before and stopped after you unplugged the cable, restart the drone.
 
   "REMOTE HOST IDENTIFICATION HAS CHANGED" on 192.168.55.1
     Every Jetson shares that USB address, so this appears if your laptop has connected to a

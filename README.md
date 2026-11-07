@@ -115,14 +115,17 @@ Rehearse this whole sequence with the props off before your test.
 
 You will get your **drone number**, its **login** and the **Wi-Fi details** from the organisers.
 The login user is `dronehacks`, and the drone's hostname is `skybeta-NN`, where `NN` is your
-drone number (drone 7 is `skybeta-07`). Your laptop and the drone must be on the same Wi-Fi network.
+drone number (drone 7 is `skybeta-07`). The drone joins DroneHacks Wifi by itself: put your laptop on
+the same network and log in by name, or by address if you have it.
 
 ```bash
+ssh dronehacks@skybeta-NN.local          # your two-digit number; retry if the name is not found
 ssh dronehacks@<your-drone's-wifi-ip>
 ```
 
-**If you don't know the Wi-Fi address, or Wi-Fi is down,** connect a USB cable from your laptop
-to the Jetson's USB-C port. Every Jetson answers on the same address over USB:
+**If Wi-Fi does not work,** connect a USB cable from your laptop to the Jetson's USB-C port. USB is
+the backup: it can stop working after the cable has been unplugged, and restarting the drone brings
+it back. Every Jetson answers on the same address over USB:
 
 ```bash
 ssh dronehacks@192.168.55.1
